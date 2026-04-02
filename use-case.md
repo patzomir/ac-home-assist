@@ -1,153 +1,91 @@
-# Smart Heating System — Core Use Case
+# Smart Heating System — MVP Use Case
 
-## 🎯 Goal
+## Един въпрос, на който отговаряме
 
-Provide consistent indoor comfort while minimizing unnecessary energy usage — automatically.
-
----
-
-## 👤 Primary User
-
-- Lives in an apartment with 1–3 AC units
-- Uses AC for heating in winter
-- Experiences mismatch between set and real temperature
-- Wants comfort without manual adjustments
-- Cares about electricity cost (but not obsessively)
+> "Колко плащам за отопление и как да плащам по-малко?"
 
 ---
 
-## 🏠 Scenario: Living Room Heating Optimization
+## Проблемът
 
-### Initial State
+Хората не знаят колко ги струва климатикът. Сметката идва веднъж месечно и е обща за всичко. Нямат как да разберат дали грее ефективно или харчи пари напразно.
 
-- AC is set to 24°C
-- Room feels cold (~21–22°C)
-- AC internal sensor is near ceiling → inaccurate
-- User manually increases temperature
+Резултатът: нямат стимул да го управляват по-умно — не защото не им пука, а защото нямат данните.
 
 ---
 
-## ⚠️ Problem
+## Как пестиш
 
-- Uneven temperature distribution
-- AC operates inefficiently
-- User constantly adjusts settings
-- Energy may be wasted OR comfort is compromised
+Има два механизма — единият е директен, другият е поведенчески.
 
----
+### Механизъм 1: Нощен setback (директни спестявания)
 
-## ✅ Solution (System Behavior)
+Типичен потребител — климатик вървящ цяла нощ на 22°C:
+- Инверторен AC при 22°C, при -2°C навън: ~600W средно
+- 8 часа нощ = ~4.8 kWh
 
-### Step 1: Real Temperature Measurement
+Със системата — 18°C за 6 часа + плавно загряване 45 мин преди ставане:
+- При 18°C: ~200W средно × 6 часа = 1.2 kWh
+- Загряване: ~800W × 0.75 часа = 0.6 kWh
+- Общо: ~1.8 kWh
 
-- External sensor measures temperature near user (e.g. sofa height)
-- System treats this as **source of truth**
+**Спестявания на нощ: ~3 kWh ≈ 0.75 BGN**
+**На сезон (150 нощи): ~450 kWh ≈ 110–120 BGN**
 
----
+Потребителят задава само: "Ставам в 7:00, искам 21°C." Системата се оправя сама.
 
-### Step 2: Continuous Monitoring
+### Механизъм 2: Видимостта променя поведението
 
-- Sensor sends temperature every 30–60 seconds
-- Hub forwards data to backend
+Когато видиш "тази сесия струва 1.40 BGN" — изключваш преди да излезеш. Без данните не го правиш, защото не знаеш.
 
----
-
-### Step 3: Intelligent Control Loop
-
-System maintains a **temperature range**, not fixed value:
-
-- Comfort range: 22–23°C
+Не може да се предскаже колко, но след 1 месец с дашборд потребителят сам го вижда.
 
 ---
 
-### Step 4: Automated Adjustment
-```
-if temp < 22:
-increase AC power (e.g. set 25°C)
-elif temp > 23:
-decrease AC power (e.g. set 22°C)
-```
+## Какво прави системата
 
-- Commands sent via IR
-- Full AC state applied (mode, temp, fan)
+1. **Смарт контакт (Shelly Plug M Gen3)** — мери реални kWh, праща данните към хъба по BLE
+2. **Хъб (ESP32 + IR)** — получава данните от контакта, управлява климатика по разписание чрез IR
+3. **Дашборд** — показва разход днес / тази седмица / този месец в BGN
+
+Потребителят вижда: "Тази нощ ти е струвала 0.42 BGN вместо 1.20 BGN."
 
 ---
 
-### Step 5: Stabilization
+## Цена на решението
 
-- System avoids frequent toggling
-- Adjusts only when outside range
-- Periodically re-syncs AC state
+| Компонент | Цена (приблизително) |
+|---|---|
+| Shelly Plug M Gen3 (BLE + WiFi + power metering) | ~35 BGN |
+| Хъб (ESP32 + IR + кутия) | ~35–40 BGN |
+| **Общо hardware cost** | **~70–75 BGN** |
+| **Продажна цена (kit)** | **130–140 BGN** |
 
----
-
-## 🎯 Outcome
-
-### For User
-
-- Stable, comfortable temperature
-- No need for manual adjustments
-- Better perceived heating performance
+Период на изплащане: **1 отоплителен сезон** само от нощния setback.
 
 ---
 
-### For System
+## Целеви потребител
 
-- Reduced overheating
-- Reduced unnecessary runtime
-- More efficient heating cycles
-
----
-
-## 💡 Secondary Benefits
-
-- Insight into real room temperature
-- Detection of anomalies:
-  - sudden drops (open window)
-  - slow heating (inefficiency)
+- Живее в апартамент с 1–2 климатика за отопление
+- Плаща ~50–90 EUR/месец сметка за ток зимата
+- Любопитен е за разходите, но няма данни
+- Не иска да строи инфраструктура сам
+- Готов да плати 120–130 BGN за готово решение
 
 ---
 
-## 🔄 Edge Case: Manual Remote Use
+## MVP обхват
 
-### Problem
+**Включено:**
+- Смарт контакт + хъб
+- Дашборд с разход в BGN (днес / седмица / месец)
+- Нощен режим: задаваш час и температура, системата се оправя сама
+- Аларма при необичайно дълга или скъпа сесия
 
-- User changes AC via remote
-- System state becomes out of sync
-
----
-
-### Handling
-
-- Periodic re-application of desired state
-- System overrides manual changes gradually
-
----
-
-## 🧪 Extended Use Cases (Future)
-
-### 1. Night Mode
-- Lower temperature automatically during sleep
-
----
-
-### 2. Away Mode
-- Reduce heating when no one is home
-
----
-
-### 3. Multi-Room Optimization
-- Balance heating across rooms
-
----
-
-### 4. Energy Insights
-- Show user:
-  - “You are overheating the room”
-  - “You can save X% with this setting”
-
----
-
-## 🧠 Core Value Proposition
-
-> “Your home stays comfortable automatically — without wasting energy or constant adjustments.”
+**Не е включено в MVP:**
+- Температурен сензор (v2 — feedback loop за реална стайна температура)
+- Мобилно приложение (web UI)
+- Повече от 1 климатик
+- Детекция на присъствие
+- Абонамент

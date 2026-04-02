@@ -3,10 +3,10 @@
 ## Overview
 
 System for optimizing home heating using:
-- 1 Hub per home
-- Multiple wireless temperature sensors
-- Backend for logic and control
-- Optional IR control for AC units
+- 1 Hub per home (ESP32 + IR + WiFi)
+- 1 Smart Plug per AC unit (Shelly Plug M Gen3 — BLE + WiFi + power monitoring)
+- Backend for scheduling and control
+- Hub-and-spoke: само хъбът се конфигурира от клиента, plug-ът се pre-pair-ва преди изпращане
 
 ---
 
@@ -17,25 +17,27 @@ System for optimizing home heating using:
 #### 1. Hub (1 per home)
 - ESP32
 - WiFi connection to backend
-- BLE scanner for sensors
+- BLE connection to Smart Plug
 - IR transmitter (for AC control)
 
 **Responsibilities:**
-- Collect sensor data (BLE)
-- Send data to backend
-- Receive commands from backend
+- Receive power data from plug via BLE, forward to backend
+- Receive schedule commands from backend
 - Control AC via IR
 
 ---
 
-#### 2. Sensors (N per home)
-- BLE temperature sensors
-- Battery-powered (coin cell)
-- Broadcast data periodically (no pairing)
+#### 2. Smart Plug (1 per AC unit)
+- Shelly Plug M Gen3 (handles up to 13A / 3000W)
+- WiFi + BLE dual connectivity
+- BLE gateway functionality
+- Plugged between AC unit and wall socket
+- Measures real-time power draw and kWh
+- **Pre-paired с хъба преди изпращане** — клиентът само включва
 
 **Measured data:**
-- Temperature
-- (Optional) Humidity
+- Watts (real-time)
+- kWh (accumulated)
 
 ---
 
@@ -53,51 +55,54 @@ System for optimizing home heating using:
 #### Entities
 
 - `Home`
-- `Room`
 - `Hub`
-- `Sensor`
-- `Reading`
+- `SmartPlug`
+- `EnergyReading`
+- `Schedule`
 
 ---
 
 ### Relationships
 
 - Home
-  - has many Rooms
   - has one Hub
-
-- Room
-  - has many Sensors
-
-- Sensor
-  - belongs to Room
-  - belongs to Home
+  - has one SmartPlug (per AC unit)
 
 - Hub
   - belongs to Home
+
+- SmartPlug
+  - belongs to Home
+  - has many EnergyReadings
+
+- Schedule
+  - belongs to Home
+  - defines time + target AC state (temp, mode)
 
 ---
 
 ## 🔄 Data Flow
 
-### Sensor → Hub
-- BLE advertising (broadcast)
-- Interval: 30–60 seconds
+### Smart Plug → Hub
+- BLE
+- Sends:
+  - real-time power (W)
+  - energy usage (kWh)
 
 ---
 
 ### Hub → Backend
-- HTTP or MQTT
+- WiFi (HTTP or MQTT)
 - Sends:
-  - sensor readings
-  - device status
+  - power data (forwarded from plug)
+  - device status (heartbeat)
 
 ---
 
 ### Backend → Hub
-- Sends control commands:
+- Sends schedule-based commands:
   - target temperature
-  - AC state
+  - AC state (on/off, mode)
 
 ---
 
@@ -112,33 +117,26 @@ System for optimizing home heating using:
 
 ## 🧠 Control Logic
 
-### Temperature Loop
+### Schedule-based control (MVP)
 
-Instead of fixed temperature:
+Backend fires IR commands at configured times:
 ```
-if room_temp < 22:
-set_ac_temp(25)
-elif room_temp > 23:
-set_ac_temp(22)
+23:00 → set_ac(temp=18, mode=heat, fan=auto)
+06:15 → set_ac(temp=22, mode=heat, fan=auto)
 ```
 
-
----
+No sensor feedback needed — AC internal sensor handles reaching the setpoint.
 
 ### Key Principles
 
-- Use external sensor as source of truth
+- Time-based scheduling is the source of truth
 - Avoid constant adjustments
-- Use temperature ranges (not fixed point)
-- Periodically re-send full AC state (resync)
+- Periodically re-send full AC state (resync in case of desync)
+- Sensor feedback loop is v2
 
 ---
 
 ## 🔋 Power Strategy
-
-### Sensors (BLE)
-- Ultra low power
-- Battery life: ~1–2 years
 
 ### Hub (ESP32)
 - Always powered (USB)
@@ -149,7 +147,7 @@ set_ac_temp(22)
 
 | Component | Technology |
 |----------|-----------|
-| Sensor → Hub | BLE (Advertising) |
+| Smart Plug → Hub | BLE |
 | Hub → Backend | WiFi (HTTP/MQTT) |
 | Hub → AC | IR |
 
@@ -173,27 +171,48 @@ set_ac_temp(22)
 
 ## 🚀 MVP Scope
 
+**Goal: Build for yourself first. Prove it works in daily use before selling to anyone.**
+
 ### Hardware
 - ESP32 hub with IR LED
-- 1–3 BLE temperature sensors
+- 1 Shelly Plug M Gen3 per AC unit
+  - BLE + WiFi dual connectivity
+  - Bulgarian standard installation uses Schuko wall plug — no rewiring needed
+  - Handles up to 13A / 3000W, covers all residential split AC units
+  - Pre-paired с хъба преди изпращане → plug and play за клиента
 
 ### Software
 - Simple backend (Django)
 - Basic API
 - Minimal UI:
-  - current temperature
-  - target range
+  - real-time power draw (W) and session cost (BGN)
+  - daily / weekly / monthly energy cost
+  - schedule configuration (night setback)
+
+### What MVP is NOT
+- No subscription billing
+- No multi-tenant / multi-user support
+- No mobile app (web UI only)
+- No OTA firmware updates
+- No in-app onboarding (pre-configuration се прави ръчно преди изпращане)
+
+Keep it simple. Complexity is only justified after it's working well for yourself.
 
 ---
 
-## 🧱 Future Improvements
+## 🧱 Future Improvements (v2+)
 
-- Custom BLE sensors (instead of off-the-shelf)
-- OTA updates for ESP32
+- BLE temperature sensors — feedback loop за реална стайна температура
 - Multi-room optimization
 - Presence detection
-- Energy usage insights
-- Native AC integrations (WiFi APIs)
+- OTA updates for ESP32
+- Native AC integrations (WiFi APIs instead of IR)
+- **Ценова оптимизация по свободен пазар**
+  - Интеграция с IBEX / ENTSO-E API за почасови спот цени
+  - Предзагряване (thermal pre-loading) в евтините часове — апартаментът като топлинна батерия
+  - Избягване на пиковите часове (17:00–21:00) без загуба на комфорт
+  - Изисква: температурен сензор (feedback loop) + ценови API в бекенда
+  - Очакван допълнителен потенциал: +40–150 BGN/сезон спрямо само нощния setback
 
 ---
 
