@@ -5,7 +5,7 @@
 System for optimizing home heating using:
 - 1 Hub per home (ESP32-C6 + WiFi + Zigbee coordinator + BLE)
 - 1 Smart Plug per AC unit (Zigbee plug with power monitoring — e.g. Nous A1Z or Sonoff S26R2ZB)
-- 1 IR Emitter per AC unit (ESP32-C3 + IR LED, Zigbee end-device)
+- 1 IR Emitter per AC unit (ESP32-H2 + IR LED, Zigbee end-device)
 - Backend for scheduling and control
 - Hub-and-spoke: само хъбът се конфигурира от клиента, plug-овете и IR emitter-ите се pre-configure-ват преди изпращане
 
@@ -51,18 +51,25 @@ System for optimizing home heating using:
 ---
 
 #### 3. IR Emitter (1 per AC unit)
-- ESP32-C3 mini (~5–8 BGN) + IR LED + transistor (~1 BGN)
+- ESP32-H2 mini (~5–10 BGN) + IR LED + transistor (~1 BGN)
 - **Battery-powered (18650 cell)** — no cables at AC unit beyond the smart plug
 - Placed directly in front of each AC unit — no line-of-sight constraint with hub
 - Zigbee end-device — routes through the co-located smart plug in the same room
 - Receives IR commands from hub via Zigbee mesh, fires IR signal at local AC unit
 
 **Power strategy: Zigbee end-device sleep + poll**
-- ESP32-C3 runs Zigbee end-device stack with sleepy polling
+- ESP32-H2 runs Zigbee end-device stack with sleepy polling
 - Device sleeps between poll intervals; configurable poll rate (e.g. 1 min)
 - Hub queues IR command to emitter; emitter receives on next wake, fires IR, returns to sleep
 - 18650 cell (3000mAh) → long battery life at low poll duty cycle
 - Tradeoff: command latency = poll interval (acceptable for schedule-based control; reduce poll interval for manual override support)
+
+**Why custom build over commercial Zigbee IR blasters (ZS06, UFO-R11):**
+- Commercial blasters are code-learning/replay devices — they store codes and fire them by index
+- This system sends structured AC state commands (`temp`, `mode`, `fan`) that must be translated to the correct IR signal per AC model
+- That translation requires native AC protocol support (e.g. ESPHome `climate_ir`) — not available in commercial blasters
+- ZS06 is USB-powered (breaks the no-cables-at-AC-unit constraint); UFO-R11 uses AAA batteries (worse capacity than 18650)
+- Neither runs a Zigbee end-device stack that accepts structured commands — they expose a "send stored code N" interface only
 
 **Why Zigbee over ESP-NOW for IR emitters:**
 - Each emitter routes through the Zigbee plug in the same room — range is structural, not placement-dependent
@@ -126,7 +133,7 @@ Customer setup (at home):
 - Hub
   - belongs to Home
   - coordinates many SmartPlugs (via Zigbee)
-  - controls many IREmitters (via ESP-NOW)
+  - controls many IREmitters (via Zigbee)
 
 - SmartPlug
   - belongs to Home
@@ -210,7 +217,7 @@ No sensor feedback needed — AC internal sensor handles reaching the setpoint.
 ### Hub (ESP32-C6)
 - Always powered (USB)
 
-### IR Emitter (ESP32-C3)
+### IR Emitter (ESP32-H2)
 - Battery-powered (18650 cell)
 - Zigbee sleepy end-device — polls coordinator at configurable interval (e.g. 1 min)
 
@@ -258,7 +265,7 @@ No sensor feedback needed — AC internal sensor handles reaching the setpoint.
   - Zigbee mesh relay through hub — range not dependent on hub placement
   - EU Schuko — no rewiring needed
   - Handles up to 16A / 3600W, covers all residential split AC units
-- **1 IR Emitter (ESP32-C3 + IR LED) per AC unit**
+- **1 IR Emitter (ESP32-H2 + IR LED) per AC unit**
   - Placed directly in front of AC — no hub line-of-sight needed
   - Battery-powered (18650) — no extra cables at the AC unit
   - Zigbee end-device — routes through co-located plug; range not dependent on hub placement
@@ -291,6 +298,7 @@ Keep it simple. Complexity is only justified after it's working well for yoursel
 - OTA updates for ESP32 and IR emitters
 - Native AC integrations (WiFi APIs instead of IR)
 - Zigbee IR delivery confirmation (coordinator ACK already built into Zigbee)
+- **Matter bridge on hub** — ESP32-C6 supports Matter over WiFi; exposing hub as a Matter bridge would allow integration with Apple Home / Google Home without replacing the Zigbee mesh. The 802.15.4 radio is shared between Zigbee and Thread, so Matter/Thread as a replacement protocol is not viable — Matter as a WiFi-based bridge layer is the realistic path.
 - **Ценова оптимизация по свободен пазар**
   - Интеграция с IBEX / ENTSO-E API за почасови спот цени
   - Предзагряване (thermal pre-loading) в евтините часове — апартаментът като топлинна батерия

@@ -57,7 +57,7 @@
 | Компонент | Цена (приблизително) |
 |---|---|
 | Shelly Plug M Gen3 (BLE + WiFi + power metering) | ~35 BGN |
-| Хъб (ESP32 + IR + кутия) | ~35–40 BGN |
+| Хъб (ESP32-C6) + IR емитер (ESP32-H2 + IR LED) + кутия | ~35–40 BGN |
 | **Общо hardware cost** | **~70–75 BGN** |
 | **Продажна цена (kit)** | **130–140 BGN** |
 
