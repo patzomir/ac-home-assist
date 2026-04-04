@@ -4,10 +4,9 @@
 
 System for optimizing home heating using:
 - 1 Hub per home (ESP32-C6 + WiFi + Zigbee coordinator + BLE)
-- 1 Smart Plug per AC unit (Zigbee plug with power monitoring — e.g. Nous A1Z or Sonoff S26R2ZB)
 - 1 IR Emitter per AC unit (ESP32-H2 + IR LED, Zigbee end-device)
-- Backend for scheduling and control
-- Hub-and-spoke: само хъбът се конфигурира от клиента, plug-овете и IR emitter-ите се pre-configure-ват преди изпращане
+- Backend for scheduling, control, and energy estimation
+- Hub-and-spoke: само хъбът се конфигурира от клиента, IR emitter-ите се pre-configure-ват преди изпращане
 
 ---
 
@@ -30,31 +29,29 @@ System for optimizing home heating using:
 
 ---
 
-#### 2. Smart Plug (1 per AC unit)
-- **Zigbee plug with power monitoring** — Nous A1Z or Sonoff S26R2ZB (~15 EUR)
-- EU Schuko — no rewiring needed
-- Handles up to 16A / 3600W — covers all residential split AC units
-- Measures real-time power draw and kWh
-- **Reports to hub via Zigbee mesh** — range is structural, not placement-dependent
-- Pre-paired with hub Zigbee coordinator before shipping — клиентът само включва
+#### 2. Energy Estimation (per AC unit)
+- No additional hardware — runs entirely in the backend
+- Inputs: AC state from IR commands (mode, set temperature) + outdoor temperature (weather API)
+- Inverter AC consumption is predictable from nameplate figures and operating conditions
+- Backend maintains AC state and computes estimated kWh per session
 
-**Measured data:**
-- Watts (real-time)
-- kWh (accumulated)
+**Estimated data:**
+- Watts (modeled from AC state + outdoor temp)
+- kWh (accumulated from model)
+- Session cost in BGN (kWh × current electricity tariff)
 
-**Why Zigbee over BLE for plugs:**
-- Zigbee mesh extends range automatically through other plugs — no range issues through concrete walls
-- Open standard — not tied to a single vendor (Shelly)
-- Multiple plug vendors available — supply chain resilience
-- No dependency on BLE GATT APIs that can change with vendor firmware updates
+**Why estimation over CT clamp for MVP:**
+- CT clamps must clamp a single wire — standard AC cables carry L + N together, fields cancel, reads zero
+- Getting to separated wires requires opening socket box or AC terminal — not viable for self-install at scale
+- Estimation answers "did I save money tonight" just as well for behavior change purposes
 
 ---
 
 #### 3. IR Emitter (1 per AC unit)
 - ESP32-H2 mini (~5–10 BGN) + IR LED + transistor (~1 BGN)
-- **Battery-powered (18650 cell)** — no cables at AC unit beyond the smart plug
+- **Battery-powered (18650 cell)** — no cables at AC unit
 - Placed directly in front of each AC unit — no line-of-sight constraint with hub
-- Zigbee end-device — routes through the co-located smart plug in the same room
+- Zigbee end-device — routes directly to hub (MVP: 1 AC); for multi-AC, Zigbee range through concrete walls may require a router node (v2 consideration)
 - Receives IR commands from hub via Zigbee mesh, fires IR signal at local AC unit
 
 **Power strategy: Zigbee end-device sleep + poll**
@@ -72,10 +69,9 @@ System for optimizing home heating using:
 - Neither runs a Zigbee end-device stack that accepts structured commands — they expose a "send stored code N" interface only
 
 **Why Zigbee over ESP-NOW for IR emitters:**
-- Each emitter routes through the Zigbee plug in the same room — range is structural, not placement-dependent
 - One protocol for all in-home devices — simpler hub firmware, no ESP-NOW peer management
-- Concrete walls between hub and remote AC units are not a problem (same reason plugs use Zigbee)
 - ESP-NOW is hub-to-device point-to-point only — no mesh fallback when signal degrades
+- Concrete walls may require a Zigbee router node in multi-AC setups (v2 consideration)
 
 ---
 
@@ -116,9 +112,8 @@ Customer setup (at home):
 
 - `Home`
 - `Hub`
-- `SmartPlug`
 - `IREmitter`
-- `EnergyReading`
+- `EnergyEstimate`
 - `Schedule`
 
 ---
@@ -132,13 +127,7 @@ Customer setup (at home):
 
 - Hub
   - belongs to Home
-  - coordinates many SmartPlugs (via Zigbee)
   - controls many IREmitters (via Zigbee)
-
-- SmartPlug
-  - belongs to Home
-  - reports via Zigbee → Hub → Backend
-  - has many EnergyReadings
 
 - IREmitter
   - belongs to Home
@@ -152,18 +141,18 @@ Customer setup (at home):
 
 ## 🔄 Data Flow
 
-### Smart Plug → Hub
-- Zigbee (mesh)
-- Sends:
-  - real-time power (W)
-  - energy usage (kWh)
+### Backend Energy Estimation
+- No hardware data — runs entirely in the backend
+- Inputs: AC state log (from IR commands) + outdoor temperature (weather API)
+- Outputs: estimated Watts, kWh per session, cost in BGN
 
 ---
 
 ### Hub → Backend
 - WiFi (HTTP or MQTT)
 - Sends:
-  - power data (forwarded from plugs)
+  - device status (heartbeat)
+- IR command confirmations (for AC state tracking)
   - device status (heartbeat)
 
 ---
@@ -177,7 +166,7 @@ Customer setup (at home):
 ---
 
 ### Hub → IR Emitter
-- Zigbee (mesh, routes through co-located plug)
+- Zigbee (mesh, routes through co-located CT clamp sensor)
 - Sends: full AC state command
 
 ---
@@ -227,8 +216,7 @@ No sensor feedback needed — AC internal sensor handles reaching the setpoint.
 
 | Link | Protocol | Notes |
 |---|---|---|
-| Smart Plug → Hub | Zigbee (mesh) | Range independent of hub placement; survives concrete walls |
-| Hub → IR Emitters | Zigbee (mesh) | Routes through co-located plug in same room; same range guarantee |
+| Hub → IR Emitters | Zigbee | Direct link for MVP (1 AC); multi-AC may need router node |
 | Hub → Backend | WiFi (HTTP/MQTT) | Hub placed centrally for good WiFi coverage |
 | IR Emitter → AC | IR | Line-of-sight to local AC unit only |
 
@@ -243,10 +231,10 @@ No sensor feedback needed — AC internal sensor handles reaching the setpoint.
 
 ### Zigbee Coordinator
 - Hub (ESP32-C6) runs Zigbee coordinator stack (Espressif Zigbee SDK)
-- Coordinator must be powered and reachable for plugs and emitters to operate
+- Coordinator must be powered and reachable for IR emitters to operate
 - Zigbee network formed at factory; devices re-join automatically if hub restarts
-- IR emitters route through the plug in the same room — each room is self-sufficient in mesh terms
-- Minimum 2 plugs needed for mesh routing benefit (single plug = direct link only)
+- MVP (1 AC): direct link hub → IR emitter, no mesh routing needed
+- Multi-AC through concrete walls: may need a mains-powered Zigbee router node per room (v2)
 
 ### Mitigations
 - Backend maintains AC state
@@ -261,14 +249,13 @@ No sensor feedback needed — AC internal sensor handles reaching the setpoint.
 
 ### Hardware
 - **ESP32-C6** hub — WiFi 6 + Zigbee coordinator + BLE + ESP-NOW, all on one chip
-- **1 Zigbee smart plug with power monitoring per AC unit** (Nous A1Z or Sonoff S26R2ZB)
-  - Zigbee mesh relay through hub — range not dependent on hub placement
-  - EU Schuko — no rewiring needed
-  - Handles up to 16A / 3600W, covers all residential split AC units
+- **Energy estimation in backend** — no additional hardware
+  - AC state tracked from IR commands
+  - Consumption modeled from AC mode + set temp + outdoor temperature (weather API)
 - **1 IR Emitter (ESP32-H2 + IR LED) per AC unit**
   - Placed directly in front of AC — no hub line-of-sight needed
   - Battery-powered (18650) — no extra cables at the AC unit
-  - Zigbee end-device — routes through co-located plug; range not dependent on hub placement
+  - Zigbee end-device — routes through co-located CT clamp; range not dependent on hub placement
   - Sleepy end-device polling → long battery life
 
 ### Software

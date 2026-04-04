@@ -5,9 +5,9 @@
 **Primary: Bulgarian apartment owners/renters (Sofia and other cities)**
 
 - Split AC units are the dominant heating method in apartments
-- Standard installation uses Schuko wall plug — smart plug monitoring viable without rewiring
+- Standard installation: plug in hub, place IR emitter in front of AC — no wiring, no tools
 - Rising electricity prices make cost visibility valuable even if savings are modest
-- Tech-comfortable early adopters willing to pay ~130–140 BGN for a ready-made solution
+- Tech-comfortable early adopters willing to pay ~70 BGN for a ready-made solution
 
 ---
 
@@ -47,8 +47,8 @@
 
 ## 💡 Strategic Position
 
-- **Price point**: 130–140 BGN total kit — ~1-season payback from night setback alone; ~11x cheaper than the Loxone hub alone
-- **Self-install**: No electrician or integrator needed
+- **Price point**: ~70 BGN total kit (1 AC) — sub-1-season payback from night setback alone; ~22x cheaper than the Loxone hub alone
+- **True self-install**: plug in hub, place IR emitter in front of AC — no tools, no wiring, no electrician
 - **Narrow focus**: Only AC heating — not a full BMS, which reduces complexity and cost
 - **Local**: Bulgarian language, Bulgarian pricing (BGN), local support
 
@@ -74,7 +74,7 @@ SmartHomeSys resells Shelly devices — meaning if this product succeeds, there 
 
 | Product | Price | Notes |
 |---|---|---|
-| This product (kit) | ~130–140 BGN | Hardware + setup + dashboard; ~1-season payback |
+| This product (kit, 1 AC) | ~70 BGN | Hardware + setup + dashboard; sub-1-season payback |
 | Loxone Miniserver (hub only) | 1,538 BGN | No installation included |
 | Shelly Plug S (alone) | ~71 BGN | No hub, no sensors, no software |
 | Sensibo Sky | ~$99–149 USD | Subscription, no energy monitoring |

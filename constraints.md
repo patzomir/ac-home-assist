@@ -1,0 +1,56 @@
+# Product Constraints
+
+## Smart Plug in AC Power Path
+
+### Technical reality
+- Nous A1Z / Sonoff S26R2ZB are rated 16A / 3600W
+- A typical residential inverter AC (e.g. 18000 BTU / 5kW cooling) draws ~6.8A max
+- Modern inverter ACs have soft-start — no high inrush current (unlike fixed-speed compressors)
+- 6.8A on a 16A plug = 43% load, well within the 80% continuous derating rule
+- Standard Schuko wall sockets are also rated 16A — the smart plug does not add a weaker link in the chain
+- The one valid technical concern: inductive motor loads cause more relay wear over time (affects longevity, not immediate safety)
+
+### Why it doesn't scale as a product
+The 16A rating is not the issue — the issue is liability at scale:
+- If anything goes wrong (house fire, damaged AC), your hardware is in the chain
+- You can't verify customer installation context: worn socket contacts, dodgy wiring, fixed-speed vs. inverter AC
+- "Check your nameplate and socket condition" is not a message you can deliver to every customer
+- The plug is technically sound — the risk is legal, not electrical
+
+### Conclusion
+Smart plug is technically fine — same 16A rating as the socket it plugs into, well within load limits for inverter ACs. Not viable as a shipped product component due to liability exposure at scale, not due to electrical unsuitability.
+
+---
+
+## Energy Visibility is Non-Negotiable
+
+The core value proposition is cost visibility — "tonight cost you 0.42 BGN instead of 1.20 BGN." Without this, the product is just a remote control. Scheduling/setback savings exist without the plug, but are invisible to the user and don't change behavior.
+
+---
+
+## Energy Monitoring Alternatives
+
+### Option 1: Power estimation (chosen for MVP) ✅
+- Inputs: AC mode + set temperature (known from IR commands) + outdoor temperature (weather API)
+- No additional hardware — works with hub + IR emitter already in the system
+- Inverter ACs behave predictably — consumption is modelable from nameplate figures
+- Answers the user's actual question ("did I save money tonight") without real measurement
+- Scales to any customer out of the box
+
+### Option 2: CT clamp sensor (pro/add-on tier)
+- **Tuya PJ-MGW1203** (~$22) or **Zemismart SPM01** (~$26)
+- Real measurement — but has a critical installation constraint:
+  - **CT clamps must be around a single wire (Live only)**
+  - Standard AC cables carry L + N together — opposite currents cancel the magnetic field → clamp reads zero
+  - Requires access to separated L and N wires (inside socket box, inside AC terminal block, or via a custom junction box)
+  - Cannot be done as a simple clip-on install — not viable for mass-market self-install
+- Viable for pro installation tier or technically confident users
+
+### Option 3: Smart plug (monitoring only, personal use)
+- Valid for personal use with known specs
+- Not a scalable product component (see above)
+
+---
+
+## Decision
+Power estimation is the MVP approach. No additional hardware, scales to any customer. CT clamp is a pro/add-on tier option for users willing to do proper installation.
