@@ -14,6 +14,10 @@ static zb_coordinator_callbacks_t s_cb;
 static ir_emitter_t s_emitters[MAX_EMITTERS];
 static uint8_t s_emitter_count = 0;
 
+/* ---- forward declaration ------------------------------------------------ */
+
+static void configure_plug_reporting(uint16_t short_addr);
+
 /* ---- helpers ------------------------------------------------------------ */
 
 static ir_emitter_t *find_emitter_by_addr(uint16_t short_addr)
@@ -114,9 +118,10 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         break;
     }
 
-    case ESP_ZB_ZDO_SIGNAL_LEAVE: {
-        esp_zb_zdo_signal_leave_params_t *lv =
-            (esp_zb_zdo_signal_leave_params_t *)
+    case ESP_ZB_ZDO_SIGNAL_LEAVE_INDICATION: {
+        /* LEAVE_INDICATION carries the short address of the departing device */
+        esp_zb_zdo_signal_leave_indication_params_t *lv =
+            (esp_zb_zdo_signal_leave_indication_params_t *)
             esp_zb_app_signal_get_params(p_sg);
         ESP_LOGI(TAG, "Device left: 0x%04x", lv->short_addr);
         ir_emitter_t *e = find_emitter_by_addr(lv->short_addr);
@@ -141,18 +146,19 @@ static void configure_plug_reporting(uint16_t short_addr)
 {
     /* Electrical Measurement — ActivePower: report every 10-60 s or on ≥5 W change */
     static int16_t em_change = 5;
-    esp_zb_zcl_attr_report_info_t em_record = {
-        .min_interval      = 10,
-        .max_interval      = 60,
-        .attr_type         = ESP_ZB_ZCL_ATTR_TYPE_S16,
-        .attr_id           = ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID,
+    esp_zb_zcl_config_report_record_t em_record = {
+        .direction        = ESP_ZB_ZCL_REPORT_DIRECTION_SEND,
+        .attributeID      = ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID,
+        .attrType         = ESP_ZB_ZCL_ATTR_TYPE_S16,
+        .min_interval     = 10,
+        .max_interval     = 60,
         .reportable_change = &em_change,
     };
     esp_zb_zcl_config_report_cmd_t em_cmd = {
         .zcl_basic_cmd = {
             .dst_addr_u.addr_short = short_addr,
-            .dst_ep  = A1Z_PLUG_ENDPOINT,
-            .src_ep  = HUB_ENDPOINT,
+            .dst_endpoint = A1Z_PLUG_ENDPOINT,
+            .src_endpoint = HUB_ENDPOINT,
         },
         .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
         .clusterID     = ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT,
@@ -163,18 +169,19 @@ static void configure_plug_reporting(uint16_t short_addr)
 
     /* Metering — CurrentSummationDelivered: report every 30-300 s or on ≥1 Wh change */
     static uint64_t mt_change = 1;
-    esp_zb_zcl_attr_report_info_t mt_record = {
-        .min_interval      = 30,
-        .max_interval      = 300,
-        .attr_type         = ESP_ZB_ZCL_ATTR_TYPE_U48,
-        .attr_id           = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
+    esp_zb_zcl_config_report_record_t mt_record = {
+        .direction        = ESP_ZB_ZCL_REPORT_DIRECTION_SEND,
+        .attributeID      = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
+        .attrType         = ESP_ZB_ZCL_ATTR_TYPE_U48,
+        .min_interval     = 30,
+        .max_interval     = 300,
         .reportable_change = &mt_change,
     };
     esp_zb_zcl_config_report_cmd_t mt_cmd = {
         .zcl_basic_cmd = {
             .dst_addr_u.addr_short = short_addr,
-            .dst_ep  = A1Z_PLUG_ENDPOINT,
-            .src_ep  = HUB_ENDPOINT,
+            .dst_endpoint = A1Z_PLUG_ENDPOINT,
+            .src_endpoint = HUB_ENDPOINT,
         },
         .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
         .clusterID     = ESP_ZB_ZCL_CLUSTER_ID_METERING,
@@ -186,27 +193,29 @@ static void configure_plug_reporting(uint16_t short_addr)
     ESP_LOGI(TAG, "Configured attribute reporting for 0x%04x", short_addr);
 }
 
-/* ---- ZCL device callback (command acks + attribute reports) ------------- */
+/* ---- ZCL core action handler (command acks + attribute reports) --------- */
 
-static void zb_device_cb(esp_zb_zcl_device_cb_param_t *param)
+static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
+                                   const void *message)
 {
-    switch (param->device_cb_id) {
+    switch (callback_id) {
 
-    case ESP_ZB_ZCL_CMD_DEFAULT_RESP_CB_ID: {
-        esp_zb_zcl_cmd_err_callback_params_t *p = &param->cb_param.cmd_err_info;
-        bool ok = (p->status == ESP_ZB_ZCL_STATUS_SUCCESS);
-        ESP_LOGD(TAG, "Cmd ack addr=0x%04x ok=%d", p->short_addr, ok);
+    case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: {
+        const esp_zb_zcl_cmd_default_resp_message_t *p = message;
+        bool ok = (p->status_code == ESP_ZB_ZCL_STATUS_SUCCESS);
+        uint16_t addr = p->info.src_address.u.short_addr;
+        ESP_LOGD(TAG, "Cmd ack addr=0x%04x ok=%d", addr, ok);
         if (s_cb.on_cmd_ack) {
-            s_cb.on_cmd_ack(p->short_addr, ok);
+            s_cb.on_cmd_ack(addr, ok);
         }
         break;
     }
 
-    case ESP_ZB_ZCL_REPORT_ATTR_CB_ID: {
-        esp_zb_zcl_report_attr_message_t *msg = &param->cb_param.report_attr_info;
+    case ESP_ZB_CORE_REPORT_ATTR_CB_ID: {
+        const esp_zb_zcl_report_attr_message_t *msg = message;
         uint16_t addr = msg->src_address.u.short_addr;
 
-        if (msg->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT &&
+        if (msg->cluster == ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT &&
             msg->attribute.id == ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID) {
             int16_t watts = *(int16_t *)msg->attribute.data.value;
             ESP_LOGD(TAG, "ActivePower from 0x%04x: %d W", addr, watts);
@@ -222,7 +231,7 @@ static void zb_device_cb(esp_zb_zcl_device_cb_param_t *param)
                 s_cb.on_plug_metering(&m);
             }
 
-        } else if (msg->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_METERING &&
+        } else if (msg->cluster == ESP_ZB_ZCL_CLUSTER_ID_METERING &&
                    msg->attribute.id == ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID) {
             uint64_t wh = 0;
             memcpy(&wh, msg->attribute.data.value, 6); /* uint48 */
@@ -245,13 +254,18 @@ static void zb_device_cb(esp_zb_zcl_device_cb_param_t *param)
     default:
         break;
     }
+    return ESP_OK;
 }
 
 /* ---- Zigbee task -------------------------------------------------------- */
 
 static void zb_task(void *arg)
 {
-    esp_zb_cfg_t cfg = ESP_ZB_ZC_CONFIG();
+    esp_zb_cfg_t cfg = {
+        .esp_zb_role          = ESP_ZB_DEVICE_TYPE_COORDINATOR,
+        .install_code_policy  = false,
+        .nwk_cfg.zczr_cfg.max_children = 10,
+    };
     esp_zb_init(&cfg);
 
     /* --- Build coordinator endpoint descriptor --- */
@@ -318,11 +332,11 @@ static void zb_task(void *arg)
     /* Use all channels; let the stack pick the clearest one */
     esp_zb_set_primary_network_channel_set(ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK);
 
-    /* Register ZCL device callback — handles command acks and attribute reports */
-    esp_zb_zcl_register_device_cb(zb_device_cb);
+    /* Register core action handler — handles command acks and attribute reports */
+    esp_zb_core_action_handler_register(zb_action_handler);
 
     ESP_ERROR_CHECK(esp_zb_start(false));
-    esp_zb_main_loop_iteration(); /* never returns */
+    esp_zb_stack_main_loop(); /* never returns */
 }
 
 /* ---- Public API --------------------------------------------------------- */
@@ -349,8 +363,8 @@ esp_err_t zb_coordinator_permit_join(uint8_t duration_s)
 {
     ESP_LOGI(TAG, "Opening join window for %d s", duration_s);
     esp_zb_zdo_permit_joining_req_param_t req = {
-        .dst_addr      = 0xFFFC, /* all routers + coordinator */
-        .duration      = duration_s,
+        .dst_nwk_addr    = 0xFFFC, /* all routers + coordinator */
+        .permit_duration = duration_s,
         .tc_significance = 1,
     };
     esp_zb_zdo_permit_joining_req(&req, NULL, NULL);
@@ -375,8 +389,8 @@ esp_err_t zb_coordinator_send_setpoint(uint16_t short_addr,
     esp_zb_zcl_write_attr_cmd_t write_cmd = {
         .zcl_basic_cmd = {
             .dst_addr_u.addr_short = short_addr,
-            .dst_ep  = e->endpoint,
-            .src_ep  = HUB_ENDPOINT,
+            .dst_endpoint = e->endpoint,
+            .src_endpoint = HUB_ENDPOINT,
         },
         .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
         .clusterID     = ESP_ZB_ZCL_CLUSTER_ID_THERMOSTAT,
@@ -408,8 +422,8 @@ esp_err_t zb_coordinator_send_power(uint16_t short_addr, bool on)
     esp_zb_zcl_on_off_cmd_t cmd = {
         .zcl_basic_cmd = {
             .dst_addr_u.addr_short = short_addr,
-            .dst_ep  = e->endpoint,
-            .src_ep  = HUB_ENDPOINT,
+            .dst_endpoint = e->endpoint,
+            .src_endpoint = HUB_ENDPOINT,
         },
         .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
         .on_off_cmd_id = on ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID

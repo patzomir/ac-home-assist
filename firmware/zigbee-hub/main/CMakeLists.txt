@@ -8,11 +8,11 @@ idf_component_register(
         "nvs_store.c"
     INCLUDE_DIRS "."
     REQUIRES
-        esp_zigbee_core
+        espressif__esp-zigbee-lib
         esp_wifi
         esp_http_client
         nvs_flash
-        esp_sntp
+        lwip
         esp_timer
         json
 )

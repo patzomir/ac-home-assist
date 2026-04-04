@@ -15,4 +15,11 @@ urlpatterns = [
 
     # Emitter management
     path("emitters/<int:emitter_id>/",       views.update_emitter,  name="update-emitter"),
+
+    # Smart plugs — hub → backend events
+    path("plug-events/",                     views.receive_plug_event, name="receive-plug-event"),
+
+    # Smart plug management
+    path("plugs/<int:plug_id>/",             views.update_plug,     name="update-plug"),
+    path("plugs/<int:plug_id>/control/",     views.control_plug,    name="control-plug"),
 ]

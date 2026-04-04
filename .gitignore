@@ -2,3 +2,6 @@
 db.sqlite3
 build/
 */build/*
+**/managed_components/*
+**/.cache/**
+**.pyc

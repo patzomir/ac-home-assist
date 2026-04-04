@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Hub, IREmitter, ACEvent, Schedule, PendingCommand
+from .models import Hub, IREmitter, ACEvent, Schedule, PendingCommand, SmartPlug, SmartPlugEvent
 from .energy_model import estimate_watts, compute_interval_cost
 from .weather import get_outdoor_temp
 
@@ -145,6 +145,43 @@ def _daily_breakdown(emitter: IREmitter, days=7):
     return result
 
 
+def _plug_cost_for_period(plug: SmartPlug, since, until=None):
+    until = until or timezone.now()
+    events = list(
+        SmartPlugEvent.objects
+        .filter(plug=plug, ts__gte=since, ts__lte=until)
+        .order_by("ts")
+    )
+    if events:
+        last = events[-1]
+        synthetic = SmartPlugEvent(
+            plug=plug,
+            measured_watts=last.measured_watts,
+            ts=until,
+        )
+        events.append(synthetic)
+    # Reuse compute_interval_cost — it reads .estimated_watts; alias the field.
+    for e in events:
+        e.estimated_watts = e.measured_watts
+    return compute_interval_cost(events)
+
+
+def _plug_daily_breakdown(plug: SmartPlug, days=7):
+    result = []
+    now = timezone.now()
+    for d in range(days - 1, -1, -1):
+        day_start = (now - timedelta(days=d)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        cost = _plug_cost_for_period(plug, day_start, day_end)
+        result.append({
+            "date":     day_start.strftime("%a %d/%m"),
+            "kwh":      cost["kwh"],
+            "cost_bgn": cost["cost_bgn"],
+        })
+    return result
+
+
 @api_view(["GET"])
 def dashboard_data(request):
     """
@@ -208,9 +245,56 @@ def dashboard_data(request):
 
     outdoor_temp = get_outdoor_temp()
 
+    plugs = []
+    for hub in hubs:
+        for plug in hub.plugs.all():
+            last_event = (
+                SmartPlugEvent.objects.filter(plug=plug).order_by("-ts").first()
+            )
+
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start  = today_start - timedelta(days=now.weekday())
+            month_start = today_start.replace(day=1)
+
+            cost_today  = _plug_cost_for_period(plug, today_start)
+            cost_week   = _plug_cost_for_period(plug, week_start)
+            cost_month  = _plug_cost_for_period(plug, month_start)
+
+            last_on = (
+                SmartPlugEvent.objects.filter(plug=plug, power_on=True)
+                .order_by("-ts").first()
+            )
+            cost_session = (
+                _plug_cost_for_period(plug, last_on.ts)
+                if last_on else {"kwh": 0, "cost_bgn": 0}
+            )
+
+            plugs.append({
+                "id":        plug.id,
+                "name":      plug.name,
+                "addr":      f"0x{plug.short_addr:04X}",
+                "hub":       hub.name,
+                "online":    plug.online,
+                "power_on":  plug.power_on,
+                "last_seen": plug.last_seen.isoformat() if plug.last_seen else None,
+                "current": {
+                    "watts": last_event.measured_watts if last_event else 0,
+                },
+                "cost": {
+                    "session_bgn": cost_session["cost_bgn"],
+                    "session_kwh": cost_session["kwh"],
+                    "today_bgn":   cost_today["cost_bgn"],
+                    "today_kwh":   cost_today["kwh"],
+                    "week_bgn":    cost_week["cost_bgn"],
+                    "month_bgn":   cost_month["cost_bgn"],
+                },
+                "daily": _plug_daily_breakdown(plug, days=7),
+            })
+
     return Response({
         "outdoor_temp_c": outdoor_temp,
         "units": units,
+        "plugs": plugs,
         "server_time": now.isoformat(),
     })
 
@@ -326,3 +410,105 @@ def update_emitter(request, emitter_id):
         emitter.save(update_fields=["name"])
 
     return Response({"id": emitter.id, "name": emitter.name})
+
+
+# ---------------------------------------------------------------------------
+# Smart plug events — hub POSTs here on every plug state / metering report
+# ---------------------------------------------------------------------------
+
+@api_view(["POST"])
+def receive_plug_event(request):
+    """
+    Payload:
+    {
+        "addr":    2,      // Zigbee short address (int)
+        "power":   true,   // plug on/off
+        "watts":   120,    // measured power (optional, 0 when off)
+        "ts":      1712345678  // unix timestamp (optional)
+    }
+    Hub identifier is sent in X-Hub-Id header.
+    """
+    data   = request.data
+    hub_id = request.headers.get("X-Hub-Id", "unknown")
+    hub, _ = Hub.objects.get_or_create(
+        identifier=hub_id,
+        defaults={"name": f"Hub {hub_id[:8]}"},
+    )
+    hub.last_seen = timezone.now()
+    hub.save(update_fields=["last_seen"])
+
+    short_addr = int(data.get("addr", 0))
+    plug, _ = SmartPlug.objects.get_or_create(
+        hub=hub,
+        short_addr=short_addr,
+        defaults={"name": f"Plug 0x{short_addr:04X}"},
+    )
+
+    power_on       = bool(data.get("power", True))
+    measured_watts = int(data.get("watts", 0))
+
+    plug.online    = True
+    plug.power_on  = power_on
+    plug.last_seen = timezone.now()
+    plug.save(update_fields=["online", "power_on", "last_seen"])
+
+    ts = timezone.now()
+    if data.get("ts"):
+        from datetime import datetime
+        ts = datetime.utcfromtimestamp(int(data["ts"])).replace(tzinfo=timezone.utc)
+
+    SmartPlugEvent.objects.create(
+        plug=plug,
+        power_on=power_on,
+        measured_watts=measured_watts,
+        ts=ts,
+    )
+
+    logger.info("Plug event from hub=%s addr=0x%04X power=%s %dW",
+                hub_id, short_addr, power_on, measured_watts)
+
+    return Response({"ok": True}, status=status.HTTP_201_CREATED)
+
+
+# ---------------------------------------------------------------------------
+# Smart plug control — toggle on/off via pending command queue
+# ---------------------------------------------------------------------------
+
+@api_view(["POST"])
+def control_plug(request, plug_id):
+    """
+    Body: {"power": true/false}
+    Queues a set_plug command for the hub to pick up.
+    """
+    try:
+        plug = SmartPlug.objects.select_related("hub").get(pk=plug_id)
+    except SmartPlug.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    power_on = bool(request.data.get("power", True))
+
+    PendingCommand.objects.create(
+        hub=plug.hub,
+        command_type="set_plug",
+        payload={"addr": plug.short_addr, "power": power_on},
+    )
+
+    return Response({"queued": True, "power": power_on})
+
+
+# ---------------------------------------------------------------------------
+# Smart plug name update
+# ---------------------------------------------------------------------------
+
+@api_view(["PATCH"])
+def update_plug(request, plug_id):
+    try:
+        plug = SmartPlug.objects.get(pk=plug_id)
+    except SmartPlug.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    if "name" in request.data:
+        plug.name = request.data["name"][:128]
+        plug.save(update_fields=["name"])
+
+    return Response({"id": plug.id, "name": plug.name})

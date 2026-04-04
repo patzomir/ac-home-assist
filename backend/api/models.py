@@ -90,6 +90,43 @@ class Schedule(models.Model):
                 f"→ {self.comfort_temp_c}°C")
 
 
+class SmartPlug(models.Model):
+    """One per smart plug. Identified by its Zigbee short address."""
+    hub         = models.ForeignKey(Hub, on_delete=models.CASCADE,
+                                    related_name="plugs")
+    short_addr  = models.IntegerField()   # Zigbee 16-bit addr
+    name        = models.CharField(max_length=128, default="Smart Plug")
+    online      = models.BooleanField(default=False)
+    power_on    = models.BooleanField(default=False)
+    last_seen   = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ("hub", "short_addr")
+
+    def __str__(self):
+        return f"{self.name} (0x{self.short_addr:04X})"
+
+
+class SmartPlugEvent(models.Model):
+    """
+    State-change or metering report from a smart plug.
+    Consecutive events define a consumption interval:
+      energy[i] = event[i].measured_watts × (event[i+1].ts - event[i].ts)
+    """
+    plug            = models.ForeignKey(SmartPlug, on_delete=models.CASCADE,
+                                        related_name="events")
+    power_on        = models.BooleanField(default=True)
+    measured_watts  = models.IntegerField(default=0)
+    ts              = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["ts"]
+
+    def __str__(self):
+        return (f"{self.plug} @ {self.ts:%Y-%m-%d %H:%M} "
+                f"{'ON' if self.power_on else 'OFF'} {self.measured_watts}W")
+
+
 class PendingCommand(models.Model):
     """
     Backend-to-hub command queue.
@@ -98,6 +135,7 @@ class PendingCommand(models.Model):
     TYPE_CHOICES = [
         ("set_schedule", "Set Schedule"),
         ("set_ac",       "Set AC State"),
+        ("set_plug",     "Set Plug State"),
     ]
 
     hub          = models.ForeignKey(Hub, on_delete=models.CASCADE,
