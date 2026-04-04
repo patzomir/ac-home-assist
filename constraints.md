@@ -8,7 +8,8 @@
 - Modern inverter ACs have soft-start — no high inrush current (unlike fixed-speed compressors)
 - 6.8A on a 16A plug = 43% load, well within the 80% continuous derating rule
 - Standard Schuko wall sockets are also rated 16A — the smart plug does not add a weaker link in the chain
-- The one valid technical concern: inductive motor loads cause more relay wear over time (affects longevity, not immediate safety)
+- Relay wear concern: inductive motor loads cause more wear than resistive — but inverter ACs are not a direct motor load at the plug. The relay switches the inverter's input stage (bridge rectifier + capacitors), which is a capacitive/resistive load at mains level. The inverter then soft-starts the compressor internally — no back-EMF, much lower inrush than a fixed-speed motor.
+- Estimated relay life at 2 switches/day: **30–50+ years** for inverter ACs (vs. 10–20 years for fixed-speed). Non-issue in practice.
 
 ### Why it doesn't scale as a product
 The 16A rating is not the issue — the issue is liability at scale:

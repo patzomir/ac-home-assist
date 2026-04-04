@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC Home Assist</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0f1117;
+    --surface: #1a1d27;
+    --card:    #22263a;
+    --border:  #2e3350;
+    --accent:  #4f8ef7;
+    --heat:    #f97316;
+    --cool:    #38bdf8;
+    --green:   #22c55e;
+    --red:     #ef4444;
+    --muted:   #6b7280;
+    --text:    #e2e8f0;
+    --text2:   #94a3b8;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* --- Layout --- */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .tagline { font-size: 13px; color: var(--text2); margin-left: auto; }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    flex-shrink: 0;
+  }
+  .dot.offline { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+
+  /* --- Status bar --- */
+  .status-bar {
+    display: flex; align-items: center; gap: 16px;
+    font-size: 13px; color: var(--text2);
+    margin-bottom: 20px;
+  }
+  .outdoor-temp { font-size: 15px; color: var(--cool); font-weight: 500; }
+  .refresh-indicator {
+    margin-left: auto; font-size: 12px; color: var(--muted);
+  }
+
+  /* --- Unit cards --- */
+  .units-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+    gap: 20px;
+  }
+
+  .unit-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .unit-header {
+    padding: 16px 20px 12px;
+    display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .unit-header h2 { font-size: 16px; font-weight: 600; flex: 1; }
+  .unit-addr { font-size: 11px; color: var(--muted); font-family: monospace; }
+
+  /* --- Current reading --- */
+  .current-row {
+    padding: 20px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0 24px;
+    align-items: center;
+  }
+  .power-big {
+    font-size: 52px; font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .power-big .unit-label { font-size: 20px; color: var(--text2); font-weight: 400; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 20px;
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .mode-heat { background: rgba(249,115,22,.18); color: var(--heat); }
+  .mode-cool { background: rgba(56,189,248,.15); color: var(--cool); }
+  .mode-off  { background: rgba(107,114,128,.15); color: var(--muted); }
+  .mode-fan  { background: rgba(79,142,247,.15);  color: var(--accent); }
+  .mode-auto { background: rgba(34,197,94,.15);   color: var(--green); }
+  .setpoint-line {
+    font-size: 13px; color: var(--text2); margin-top: 4px;
+  }
+
+  /* session cost */
+  .session-cost {
+    text-align: right;
+  }
+  .session-cost .amount {
+    font-size: 28px; font-weight: 700; color: var(--heat);
+    font-variant-numeric: tabular-nums;
+  }
+  .session-cost .label { font-size: 11px; color: var(--muted); }
+
+  /* --- Cost grid --- */
+  .cost-row {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--border);
+    border-top: 1px solid var(--border);
+  }
+  .cost-cell {
+    background: var(--card); padding: 14px 16px; text-align: center;
+  }
+  .cost-cell .amount {
+    font-size: 22px; font-weight: 700; color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .cost-cell .amount.saving { color: var(--green); }
+  .cost-cell .label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .cost-cell .sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+
+  /* --- Chart --- */
+  .chart-section {
+    padding: 16px 20px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .chart-section h3 { font-size: 12px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .8px; margin-bottom: 12px; }
+  .chart-wrap { height: 130px; }
+
+  /* --- Schedule --- */
+  .schedule-section {
+    padding: 16px 20px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .schedule-section h3 {
+    font-size: 12px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .8px; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .schedule-form {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 16px;
+  }
+  .form-group label {
+    display: block; font-size: 11px; color: var(--muted);
+    margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px;
+  }
+  .form-group input, .form-group select {
+    width: 100%; background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 10px;
+    font-size: 14px;
+  }
+  .form-group input:focus, .form-group select:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .form-actions {
+    grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 4px;
+    align-items: center;
+  }
+  .btn {
+    padding: 8px 18px; border-radius: 8px; border: none;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: opacity .15s;
+  }
+  .btn:hover { opacity: .85; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost   { background: transparent; color: var(--text2);
+                 border: 1px solid var(--border); }
+  .save-status { font-size: 12px; color: var(--green); }
+
+  /* --- Empty state --- */
+  .empty {
+    text-align: center; padding: 80px 20px;
+    color: var(--muted); font-size: 15px;
+  }
+  .empty .icon { font-size: 40px; margin-bottom: 12px; }
+
+  /* --- Spinner on load --- */
+  .spinner {
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="dot" id="server-dot"></div>
+  <h1>AC Home Assist</h1>
+  <span class="tagline">Smart heating · Cost visibility</span>
+</header>
+
+<main>
+  <div class="status-bar">
+    <span id="outdoor-label">Outdoor: —</span>
+    <span id="time-label"></span>
+    <span class="refresh-indicator" id="refresh-label">Refreshing…</span>
+  </div>
+
+  <div class="units-grid" id="units-grid">
+    <div class="empty"><div class="icon">📡</div>Waiting for hub data…</div>
+  </div>
+</main>
+
+<script>
+/* ============================================================
+   Dashboard — polling + rendering
+   ============================================================ */
+
+const API = '/api';
+const REFRESH_MS = 30_000;
+
+const charts = {};       // emitter_id → Chart instance
+const saveStatus = {};   // emitter_id → timeout
+
+/* ---------- fetch + render loop ---------- */
+
+async function fetchAndRender() {
+  setRefreshLabel('Refreshing…');
+  try {
+    const res = await fetch(`${API}/dashboard/`);
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    render(data);
+    setRefreshLabel(`Updated ${formatTime(new Date())}`);
+    document.getElementById('server-dot').classList.remove('offline');
+  } catch (e) {
+    setRefreshLabel('Connection lost');
+    document.getElementById('server-dot').classList.add('offline');
+  }
+}
+
+function setRefreshLabel(txt) {
+  document.getElementById('refresh-label').textContent = txt;
+}
+
+function formatTime(d) {
+  return d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+
+/* ---------- main render ---------- */
+
+function render(data) {
+  /* outdoor temp */
+  const ot = data.outdoor_temp_c;
+  document.getElementById('outdoor-label').textContent =
+    ot !== null ? `Outdoor: ${ot.toFixed(1)} °C` : 'Outdoor: —';
+
+  const grid = document.getElementById('units-grid');
+
+  if (!data.units || data.units.length === 0) {
+    grid.innerHTML = `<div class="empty"><div class="icon">📡</div>No devices paired yet.<br>Power on the hub and pair an IR emitter.</div>`;
+    return;
+  }
+
+  /* clear empty state if present */
+  if (grid.querySelector('.empty')) grid.innerHTML = '';
+
+  /* ensure a card per unit */
+  const existingIds = new Set([...grid.querySelectorAll('[data-unit-id]')].map(el => el.dataset.unitId));
+  data.units.forEach(u => {
+    if (!existingIds.has(String(u.id))) {
+      grid.appendChild(buildCard(u));
+    }
+  });
+
+  /* update each card */
+  data.units.forEach(u => updateCard(u));
+}
+
+/* ---------- card DOM ---------- */
+
+function buildCard(u) {
+  const card = document.createElement('div');
+  card.className = 'unit-card';
+  card.dataset.unitId = u.id;
+  card.innerHTML = `
+    <div class="unit-header">
+      <div class="dot offline" id="dot-${u.id}"></div>
+      <h2 id="name-${u.id}" data-emitter-id="${u.id}"
+          title="Click to rename" style="cursor:pointer">${esc(u.name)}</h2>
+      <span class="unit-addr">${esc(u.addr)}</span>
+    </div>
+
+    <div class="current-row">
+      <div>
+        <div class="power-big" id="watts-${u.id}">—<span class="unit-label"> W</span></div>
+        <div class="setpoint-line" id="setpoint-${u.id}"></div>
+      </div>
+      <div>
+        <span class="mode-badge mode-off" id="mode-${u.id}">off</span>
+      </div>
+      <div class="session-cost">
+        <div class="amount" id="session-cost-${u.id}">—</div>
+        <div class="label">BGN · session</div>
+        <div class="sub" id="session-kwh-${u.id}"></div>
+      </div>
+    </div>
+
+    <div class="cost-row">
+      <div class="cost-cell">
+        <div class="amount" id="today-${u.id}">—</div>
+        <div class="label">BGN today</div>
+        <div class="sub" id="today-kwh-${u.id}"></div>
+      </div>
+      <div class="cost-cell">
+        <div class="amount" id="week-${u.id}">—</div>
+        <div class="label">BGN this week</div>
+      </div>
+      <div class="cost-cell">
+        <div class="amount" id="month-${u.id}">—</div>
+        <div class="label">BGN this month</div>
+      </div>
+    </div>
+
+    <div class="chart-section">
+      <h3>7-day consumption (BGN/day)</h3>
+      <div class="chart-wrap"><canvas id="chart-${u.id}"></canvas></div>
+    </div>
+
+    <div class="schedule-section">
+      <h3>
+        Night setback schedule
+        <label style="margin-left:auto;display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text2)">
+          <input type="checkbox" id="sched-enabled-${u.id}"> Enabled
+        </label>
+      </h3>
+      <form class="schedule-form" id="sched-form-${u.id}" onsubmit="saveSchedule(event, ${u.id})">
+        <div class="form-group">
+          <label>Comfort temp (°C)</label>
+          <input type="number" id="sched-comfort-${u.id}" min="15" max="30" value="21">
+        </div>
+        <div class="form-group">
+          <label>Setback temp (°C)</label>
+          <input type="number" id="sched-setback-${u.id}" min="10" max="25" value="18">
+        </div>
+        <div class="form-group">
+          <label>Sleep time</label>
+          <input type="time" id="sched-sleep-${u.id}" value="23:00">
+        </div>
+        <div class="form-group">
+          <label>Wake time</label>
+          <input type="time" id="sched-wake-${u.id}" value="07:00">
+        </div>
+        <div class="form-group">
+          <label>Preheat (minutes before wake)</label>
+          <input type="number" id="sched-preheat-${u.id}" min="0" max="120" value="45">
+        </div>
+        <div class="form-group">
+          <label>Mode</label>
+          <select id="sched-mode-${u.id}">
+            <option value="heat">Heat</option>
+            <option value="cool">Cool</option>
+          </select>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save & push to hub</button>
+          <span class="save-status" id="save-status-${u.id}"></span>
+        </div>
+      </form>
+    </div>
+  `;
+
+  /* inline rename on name click */
+  card.querySelector(`#name-${u.id}`).addEventListener('click', () => renameEmitter(u.id));
+
+  /* load existing schedule */
+  loadSchedule(u.id);
+
+  return card;
+}
+
+/* ---------- card update ---------- */
+
+function updateCard(u) {
+  const cur = u.current || {};
+  const cost = u.cost || {};
+
+  /* online dot */
+  const dot = document.getElementById(`dot-${u.id}`);
+  if (dot) dot.classList.toggle('offline', !u.online);
+
+  /* watts */
+  setText(`watts-${u.id}`, cur.watts !== undefined
+    ? `${cur.watts}<span class="unit-label"> W</span>` : '—<span class="unit-label"> W</span>',
+    /*html=*/true);
+
+  /* setpoint */
+  const sp = cur.setpoint_c || 0;
+  const ot = cur.outdoor_c;
+  setText(`setpoint-${u.id}`,
+    cur.power_on ? `Target ${sp}°C${ot !== null && ot !== undefined ? ` · Outdoor ${ot.toFixed(1)}°C` : ''}`
+                 : 'Off');
+
+  /* mode badge */
+  const modeBadge = document.getElementById(`mode-${u.id}`);
+  if (modeBadge) {
+    const m = cur.mode || 'off';
+    modeBadge.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+    modeBadge.className = `mode-badge mode-${m}`;
+  }
+
+  /* costs */
+  setText(`session-cost-${u.id}`, fmt(cost.session_bgn));
+  setText(`session-kwh-${u.id}`,  cost.session_kwh ? `${cost.session_kwh.toFixed(3)} kWh` : '');
+  setText(`today-${u.id}`,  fmt(cost.today_bgn));
+  setText(`today-kwh-${u.id}`, cost.today_kwh ? `${cost.today_kwh.toFixed(3)} kWh` : '');
+  setText(`week-${u.id}`,   fmt(cost.week_bgn));
+  setText(`month-${u.id}`,  fmt(cost.month_bgn));
+
+  /* chart */
+  updateChart(u.id, u.daily || []);
+}
+
+/* ---------- chart ---------- */
+
+function updateChart(id, daily) {
+  const canvas = document.getElementById(`chart-${id}`);
+  if (!canvas) return;
+
+  const labels = daily.map(d => d.date);
+  const values = daily.map(d => d.cost_bgn);
+  const maxVal = Math.max(...values, 0.01);
+
+  const barColors = values.map(v =>
+    v > maxVal * 0.75 ? 'rgba(249,115,22,0.75)'
+    : v > maxVal * 0.4 ? 'rgba(79,142,247,0.75)'
+    : 'rgba(34,197,94,0.75)'
+  );
+
+  if (charts[id]) {
+    charts[id].data.labels = labels;
+    charts[id].data.datasets[0].data = values;
+    charts[id].data.datasets[0].backgroundColor = barColors;
+    charts[id].update('none');
+    return;
+  }
+
+  charts[id] = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: barColors,
+        borderRadius: 5,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.parsed.y.toFixed(4)} BGN`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(46,51,80,0.5)' },
+          ticks: { color: '#6b7280', font: { size: 11 } }
+        },
+        y: {
+          grid: { color: 'rgba(46,51,80,0.5)' },
+          ticks: {
+            color: '#6b7280', font: { size: 11 },
+            callback: v => v.toFixed(2)
+          },
+          beginAtZero: true,
+        }
+      }
+    }
+  });
+}
+
+/* ---------- schedule ---------- */
+
+async function loadSchedule(emitterId) {
+  try {
+    const res = await fetch(`${API}/emitters/${emitterId}/schedule/`);
+    if (!res.ok) return;
+    const s = await res.json();
+    if (!s || !s.comfort_temp_c) return;
+
+    setVal(`sched-comfort-${emitterId}`,  s.comfort_temp_c);
+    setVal(`sched-setback-${emitterId}`,  s.setback_temp_c);
+    setVal(`sched-preheat-${emitterId}`,  s.preheat_minutes);
+    setVal(`sched-mode-${emitterId}`,     s.mode);
+    setVal(`sched-sleep-${emitterId}`,    `${String(s.sleep_hour).padStart(2,'0')}:${String(s.sleep_minute).padStart(2,'0')}`);
+    setVal(`sched-wake-${emitterId}`,     `${String(s.wake_hour).padStart(2,'0')}:${String(s.wake_minute).padStart(2,'0')}`);
+    const cb = document.getElementById(`sched-enabled-${emitterId}`);
+    if (cb) cb.checked = s.enabled;
+  } catch (_) {}
+}
+
+async function saveSchedule(event, emitterId) {
+  event.preventDefault();
+
+  const sleep = getVal(`sched-sleep-${emitterId}`).split(':');
+  const wake  = getVal(`sched-wake-${emitterId}`).split(':');
+
+  const payload = {
+    comfort_temp_c:  parseInt(getVal(`sched-comfort-${emitterId}`)),
+    setback_temp_c:  parseInt(getVal(`sched-setback-${emitterId}`)),
+    preheat_minutes: parseInt(getVal(`sched-preheat-${emitterId}`)),
+    mode:            getVal(`sched-mode-${emitterId}`),
+    sleep_hour:      parseInt(sleep[0]),
+    sleep_minute:    parseInt(sleep[1]),
+    wake_hour:       parseInt(wake[0]),
+    wake_minute:     parseInt(wake[1]),
+    enabled:         document.getElementById(`sched-enabled-${emitterId}`)?.checked ?? true,
+  };
+
+  try {
+    const res = await fetch(`${API}/emitters/${emitterId}/schedule/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(res.status);
+    showSaveStatus(emitterId, 'Saved & queued for hub');
+  } catch (e) {
+    showSaveStatus(emitterId, 'Save failed');
+  }
+}
+
+function showSaveStatus(emitterId, msg) {
+  const el = document.getElementById(`save-status-${emitterId}`);
+  if (!el) return;
+  el.textContent = msg;
+  clearTimeout(saveStatus[emitterId]);
+  saveStatus[emitterId] = setTimeout(() => { el.textContent = ''; }, 4000);
+}
+
+/* ---------- rename ---------- */
+
+async function renameEmitter(emitterId) {
+  const nameEl = document.getElementById(`name-${emitterId}`);
+  if (!nameEl) return;
+  const current = nameEl.textContent;
+  const newName = prompt('Rename AC unit:', current);
+  if (!newName || newName === current) return;
+
+  try {
+    const res = await fetch(`${API}/emitters/${emitterId}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (!res.ok) throw new Error(res.status);
+    nameEl.textContent = newName;
+  } catch (_) {}
+}
+
+/* ---------- helpers ---------- */
+
+function setText(id, val, html = false) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (html) el.innerHTML = val; else el.textContent = val;
+}
+
+function setVal(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.value = val;
+}
+
+function getVal(id) {
+  return document.getElementById(id)?.value ?? '';
+}
+
+function fmt(val) {
+  if (val === undefined || val === null) return '—';
+  return val.toFixed(4);
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/* ---------- boot ---------- */
+
+fetchAndRender();
+setInterval(fetchAndRender, REFRESH_MS);
+</script>
+</body>
+</html>
