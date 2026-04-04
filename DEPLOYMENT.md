@@ -202,7 +202,41 @@ The emitter is now paired. Point it at the AC unit's IR receiver (usually on the
 
 ---
 
-## Part 4: Dashboard
+## Part 4: Pairing a Nous A1Z Smart Plug
+
+The Nous A1Z is a Zigbee smart plug (16A rated) that can join the hub's network and be controlled via on/off commands.
+
+### Join window
+
+The hub opens a **3-minute join window automatically on every boot**. You will see this in the serial monitor:
+
+```
+Zigbee network up — PAN 0x1234 ch 11
+Network steering done, join window open
+```
+
+If the window has already closed, power-cycle the hub to reopen it.
+
+### Pairing steps
+
+1. Plug the Nous A1Z into a wall socket.
+2. Hold the button for **5 seconds** until the LED blinks rapidly (fast blue flash means it is scanning for a coordinator).
+3. Release — it will join the hub's network automatically within a few seconds.
+
+Confirm in the serial monitor:
+
+```
+Device announce: short=0xABCD
+IR emitter joined: 0xABCD
+Default schedule applied to 0xABCD
+Configured attribute reporting for 0xABCD
+```
+
+The hub registers Metering and Electrical Measurement cluster clients on its endpoint and immediately sends a Configure Reporting command to the plug after it joins. The A1Z will begin pushing `ActivePower` readings (every 10–60 s, or on a ≥5 W change) and `CurrentSummationDelivered` readings (every 30–300 s, or on a ≥1 Wh change) to the hub. These are forwarded to the backend at `POST /api/plug-metering`.
+
+---
+
+## Part 5: Dashboard
 
 Open a browser and go to:
 
@@ -230,3 +264,4 @@ The dashboard polls the backend every 30 seconds automatically.
 | Dashboard shows no data | Backend not migrated | Run `python manage.py migrate` and restart |
 | Time sync timed out | NTP blocked by router | Ensure `pool.ntp.org` is reachable on your network |
 | AC not responding to commands | IR emitter not aimed correctly | Reposition emitter; test with AC remote to confirm IR receiver location |
+| Nous A1Z joined but shows no energy data | Reporting not configured yet | Check monitor for `Configured attribute reporting` — if missing, power-cycle the plug to re-trigger the join |

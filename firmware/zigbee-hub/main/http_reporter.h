@@ -19,3 +19,6 @@ typedef struct {
 
 esp_err_t http_reporter_init(void);
 esp_err_t http_reporter_send_event(const ac_event_t *event);
+
+/* Report a smart plug metering reading to the backend */
+esp_err_t http_reporter_send_metering(const plug_metering_t *reading);

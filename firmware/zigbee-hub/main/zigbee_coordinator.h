@@ -10,6 +10,9 @@
 /* IR emitter (ESP32-H2) uses this endpoint */
 #define IR_EMITTER_ENDPOINT         10
 
+/* Nous A1Z smart plug endpoint */
+#define A1Z_PLUG_ENDPOINT           1
+
 /* Temperature: Zigbee represents °C × 100 (int16_t) */
 #define ZB_TEMP(celsius)            ((int16_t)((celsius) * 100))
 
@@ -33,12 +36,23 @@ typedef struct {
 /* Up to 4 AC units per hub (MVP: 1) */
 #define MAX_EMITTERS 4
 
+/* Power metering reading from a smart plug (Nous A1Z) */
+typedef struct {
+    uint16_t short_addr;
+    bool     has_power;        /* active_power_w is valid */
+    int16_t  active_power_w;   /* instantaneous power in W (Electrical Measurement cluster) */
+    bool     has_summation;    /* summation_wh is valid */
+    uint64_t summation_wh;     /* raw CurrentSummationDelivered from Metering cluster */
+    uint32_t unix_ts;
+} plug_metering_t;
+
 /* Callbacks fired by the coordinator */
 typedef struct {
     void (*on_network_formed)(uint16_t pan_id, uint8_t channel);
     void (*on_device_joined)(const ir_emitter_t *emitter);
     void (*on_device_left)(uint16_t short_addr);
     void (*on_cmd_ack)(uint16_t short_addr, bool success);
+    void (*on_plug_metering)(const plug_metering_t *reading);
 } zb_coordinator_callbacks_t;
 
 esp_err_t zb_coordinator_init(const zb_coordinator_callbacks_t *callbacks);

@@ -79,6 +79,11 @@ static void on_cmd_ack(uint16_t short_addr, bool success)
     }
 }
 
+static void on_plug_metering(const plug_metering_t *reading)
+{
+    http_reporter_send_metering(reading);
+}
+
 /* ---- WiFi callbacks ----------------------------------------------------- */
 
 static void on_wifi_connected(void)
@@ -136,10 +141,11 @@ void app_main(void)
 
     /* Zigbee coordinator — starts its own FreeRTOS task */
     zb_coordinator_callbacks_t zb_cb = {
-        .on_network_formed = on_network_formed,
-        .on_device_joined  = on_device_joined,
-        .on_device_left    = on_device_left,
-        .on_cmd_ack        = on_cmd_ack,
+        .on_network_formed  = on_network_formed,
+        .on_device_joined   = on_device_joined,
+        .on_device_left     = on_device_left,
+        .on_cmd_ack         = on_cmd_ack,
+        .on_plug_metering   = on_plug_metering,
     };
     ESP_ERROR_CHECK(zb_coordinator_init(&zb_cb));
 

@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_zigbee_core.h"
+#include <time.h>
 
 static const char *TAG = "zb_coord";
 
@@ -107,6 +108,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             s_cb.on_device_joined(e);
             nvs_store_save_emitters(s_emitters, s_emitter_count);
         }
+        /* Configure metering attribute reports on every joined device.
+           Non-metering devices (IR emitters) will simply reject the command. */
+        configure_plug_reporting(ann->device_short_addr);
         break;
     }
 
@@ -131,14 +135,115 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     }
 }
 
-/* ---- Zigbee ZCMD response callback -------------------------------------- */
+/* ---- Attribute reporting configuration ---------------------------------- */
 
-static void send_cmd_cb(esp_zb_zcl_cmd_err_callback_params_t *params)
+static void configure_plug_reporting(uint16_t short_addr)
 {
-    bool ok = (params->status == ESP_ZB_ZCL_STATUS_SUCCESS);
-    ESP_LOGD(TAG, "Cmd ack addr=0x%04x ok=%d", params->short_addr, ok);
-    if (s_cb.on_cmd_ack) {
-        s_cb.on_cmd_ack(params->short_addr, ok);
+    /* Electrical Measurement — ActivePower: report every 10-60 s or on ≥5 W change */
+    static int16_t em_change = 5;
+    esp_zb_zcl_attr_report_info_t em_record = {
+        .min_interval      = 10,
+        .max_interval      = 60,
+        .attr_type         = ESP_ZB_ZCL_ATTR_TYPE_S16,
+        .attr_id           = ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID,
+        .reportable_change = &em_change,
+    };
+    esp_zb_zcl_config_report_cmd_t em_cmd = {
+        .zcl_basic_cmd = {
+            .dst_addr_u.addr_short = short_addr,
+            .dst_ep  = A1Z_PLUG_ENDPOINT,
+            .src_ep  = HUB_ENDPOINT,
+        },
+        .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+        .clusterID     = ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT,
+        .record_number = 1,
+        .record_field  = &em_record,
+    };
+    esp_zb_zcl_config_report_cmd_req(&em_cmd);
+
+    /* Metering — CurrentSummationDelivered: report every 30-300 s or on ≥1 Wh change */
+    static uint64_t mt_change = 1;
+    esp_zb_zcl_attr_report_info_t mt_record = {
+        .min_interval      = 30,
+        .max_interval      = 300,
+        .attr_type         = ESP_ZB_ZCL_ATTR_TYPE_U48,
+        .attr_id           = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
+        .reportable_change = &mt_change,
+    };
+    esp_zb_zcl_config_report_cmd_t mt_cmd = {
+        .zcl_basic_cmd = {
+            .dst_addr_u.addr_short = short_addr,
+            .dst_ep  = A1Z_PLUG_ENDPOINT,
+            .src_ep  = HUB_ENDPOINT,
+        },
+        .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+        .clusterID     = ESP_ZB_ZCL_CLUSTER_ID_METERING,
+        .record_number = 1,
+        .record_field  = &mt_record,
+    };
+    esp_zb_zcl_config_report_cmd_req(&mt_cmd);
+
+    ESP_LOGI(TAG, "Configured attribute reporting for 0x%04x", short_addr);
+}
+
+/* ---- ZCL device callback (command acks + attribute reports) ------------- */
+
+static void zb_device_cb(esp_zb_zcl_device_cb_param_t *param)
+{
+    switch (param->device_cb_id) {
+
+    case ESP_ZB_ZCL_CMD_DEFAULT_RESP_CB_ID: {
+        esp_zb_zcl_cmd_err_callback_params_t *p = &param->cb_param.cmd_err_info;
+        bool ok = (p->status == ESP_ZB_ZCL_STATUS_SUCCESS);
+        ESP_LOGD(TAG, "Cmd ack addr=0x%04x ok=%d", p->short_addr, ok);
+        if (s_cb.on_cmd_ack) {
+            s_cb.on_cmd_ack(p->short_addr, ok);
+        }
+        break;
+    }
+
+    case ESP_ZB_ZCL_REPORT_ATTR_CB_ID: {
+        esp_zb_zcl_report_attr_message_t *msg = &param->cb_param.report_attr_info;
+        uint16_t addr = msg->src_address.u.short_addr;
+
+        if (msg->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT &&
+            msg->attribute.id == ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID) {
+            int16_t watts = *(int16_t *)msg->attribute.data.value;
+            ESP_LOGD(TAG, "ActivePower from 0x%04x: %d W", addr, watts);
+            if (s_cb.on_plug_metering) {
+                plug_metering_t m = {
+                    .short_addr    = addr,
+                    .has_power     = true,
+                    .active_power_w = watts,
+                    .has_summation = false,
+                    .summation_wh  = 0,
+                    .unix_ts       = (uint32_t)time(NULL),
+                };
+                s_cb.on_plug_metering(&m);
+            }
+
+        } else if (msg->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_METERING &&
+                   msg->attribute.id == ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID) {
+            uint64_t wh = 0;
+            memcpy(&wh, msg->attribute.data.value, 6); /* uint48 */
+            ESP_LOGD(TAG, "Summation from 0x%04x: %llu Wh", addr, (unsigned long long)wh);
+            if (s_cb.on_plug_metering) {
+                plug_metering_t m = {
+                    .short_addr    = addr,
+                    .has_power     = false,
+                    .active_power_w = 0,
+                    .has_summation = true,
+                    .summation_wh  = wh,
+                    .unix_ts       = (uint32_t)time(NULL),
+                };
+                s_cb.on_plug_metering(&m);
+            }
+        }
+        break;
+    }
+
+    default:
+        break;
     }
 }
 
@@ -183,6 +288,16 @@ static void zb_task(void *arg)
         esp_zb_on_off_cluster_create(NULL),
         ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
 
+    /* Metering cluster (CLIENT) — hub reads energy summation from smart plugs */
+    esp_zb_cluster_list_add_metering_cluster(cl,
+        esp_zb_metering_cluster_create(NULL),
+        ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
+
+    /* Electrical Measurement cluster (CLIENT) — hub reads instantaneous power */
+    esp_zb_cluster_list_add_electrical_meas_cluster(cl,
+        esp_zb_electrical_meas_cluster_create(NULL),
+        ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
+
     /* Time cluster (SERVER) — hub is time master for emitters */
     esp_zb_time_cluster_cfg_t time_cfg = { 0 };
     esp_zb_cluster_list_add_time_cluster(cl,
@@ -203,8 +318,8 @@ static void zb_task(void *arg)
     /* Use all channels; let the stack pick the clearest one */
     esp_zb_set_primary_network_channel_set(ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK);
 
-    /* Register command error callback for ack tracking */
-    esp_zb_zcl_register_device_cb((esp_zb_zcl_device_callback_t)send_cmd_cb);
+    /* Register ZCL device callback — handles command acks and attribute reports */
+    esp_zb_zcl_register_device_cb(zb_device_cb);
 
     ESP_ERROR_CHECK(esp_zb_start(false));
     esp_zb_main_loop_iteration(); /* never returns */
