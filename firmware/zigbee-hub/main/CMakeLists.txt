@@ -11,6 +11,7 @@ idf_component_register(
         espressif__esp-zigbee-lib
         esp_wifi
         esp_http_client
+        esp_http_server
         nvs_flash
         lwip
         esp_timer
