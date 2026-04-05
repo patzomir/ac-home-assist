@@ -157,7 +157,7 @@ static void configure_plug_reporting(uint16_t short_addr)
     esp_zb_zcl_config_report_cmd_t em_cmd = {
         .zcl_basic_cmd = {
             .dst_addr_u.addr_short = short_addr,
-            .dst_endpoint = A1Z_PLUG_ENDPOINT,
+            .dst_endpoint = A7Z_PLUG_ENDPOINT,
             .src_endpoint = HUB_ENDPOINT,
         },
         .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
@@ -180,7 +180,7 @@ static void configure_plug_reporting(uint16_t short_addr)
     esp_zb_zcl_config_report_cmd_t mt_cmd = {
         .zcl_basic_cmd = {
             .dst_addr_u.addr_short = short_addr,
-            .dst_endpoint = A1Z_PLUG_ENDPOINT,
+            .dst_endpoint = A7Z_PLUG_ENDPOINT,
             .src_endpoint = HUB_ENDPOINT,
         },
         .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,

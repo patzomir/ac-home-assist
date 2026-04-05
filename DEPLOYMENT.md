@@ -232,7 +232,7 @@ Default schedule applied to 0xABCD
 Configured attribute reporting for 0xABCD
 ```
 
-The hub registers Metering and Electrical Measurement cluster clients on its endpoint and immediately sends a Configure Reporting command to the plug after it joins. The A1Z will begin pushing `ActivePower` readings (every 10–60 s, or on a ≥5 W change) and `CurrentSummationDelivered` readings (every 30–300 s, or on a ≥1 Wh change) to the hub. These are forwarded to the backend at `POST /api/plug-metering`.
+The hub registers Metering and Electrical Measurement cluster clients on its endpoint and immediately sends a Configure Reporting command to the plug after it joins. The A7Z will begin pushing `ActivePower` readings (every 10–60 s, or on a ≥5 W change) and `CurrentSummationDelivered` readings (every 30–300 s, or on a ≥1 Wh change) to the hub. These are forwarded to the backend at `POST /api/plug-metering`.
 
 ---
 

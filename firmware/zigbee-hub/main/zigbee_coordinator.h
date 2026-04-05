@@ -10,8 +10,8 @@
 /* IR emitter (ESP32-H2) uses this endpoint */
 #define IR_EMITTER_ENDPOINT         10
 
-/* Nous A1Z smart plug endpoint */
-#define A1Z_PLUG_ENDPOINT           1
+/* Nous A7Z smart plug endpoint */
+#define A7Z_PLUG_ENDPOINT           1
 
 /* Temperature: Zigbee represents °C × 100 (int16_t) */
 #define ZB_TEMP(celsius)            ((int16_t)((celsius) * 100))
@@ -36,7 +36,7 @@ typedef struct {
 /* Up to 4 AC units per hub (MVP: 1) */
 #define MAX_EMITTERS 4
 
-/* Power metering reading from a smart plug (Nous A1Z) */
+/* Power metering reading from a smart plug (Nous A7Z) */
 typedef struct {
     uint16_t short_addr;
     bool     has_power;        /* active_power_w is valid */
