@@ -3,7 +3,7 @@
 ## Smart Plug in AC Power Path
 
 ### Technical reality
-- Nous A1Z / Sonoff S26R2ZB are rated 16A / 3600W
+- Nous A7Z / Sonoff S26R2ZB are rated 16A / 3600W
 - A typical residential inverter AC (e.g. 18000 BTU / 5kW cooling) draws ~6.8A max
 - Modern inverter ACs have soft-start — no high inrush current (unlike fixed-speed compressors)
 - 6.8A on a 16A plug = 43% load, well within the 80% continuous derating rule
