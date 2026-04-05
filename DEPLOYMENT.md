@@ -95,24 +95,7 @@ ls /dev/cu.usb* /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 idf.py -p /dev/cu.usbserial-XXXX monitor
 ```
 
-### Step 2 — Configure WiFi credentials
-
-WiFi credentials are compiled into the firmware. Edit `sdkconfig.defaults` before building:
-
-```
-firmware/zigbee-hub/sdkconfig.defaults
-```
-
-Find these two lines and fill in your network details:
-
-```
-CONFIG_ESP_WIFI_SSID="your-wifi-name"
-CONFIG_ESP_WIFI_PASSWORD="your-wifi-password"
-```
-
-Only WPA2-PSK networks are supported. The hub does not support open networks or WPA3-only routers.
-
-### Step 3 — Configure the backend URL
+### Step 2 — Configure the backend URL
 
 The hub reports AC events to `POST /api/events`. Open `firmware/zigbee-hub/main/http_reporter.c` and set the backend URL to point at your server.
 
@@ -122,7 +105,7 @@ Look for the `BACKEND_URL` or endpoint definition and set it to:
 http://<server-ip>:8765/api/events/
 ```
 
-### Step 4 — Build and flash
+### Step 3 — Build and flash
 
 ```bash
 cd firmware/zigbee-hub
@@ -151,23 +134,58 @@ idf.py -p /dev/cu.usbserial-XXXX flash monitor
 
 Press `Ctrl+]` to exit the monitor.
 
-### Step 5 — Verify the hub booted correctly
+### Step 4 — Provision WiFi on first boot
 
-In the serial monitor you should see the boot sequence in this order:
+WiFi credentials are **not compiled into the firmware**. On the very first boot the hub starts
+a setup access point instead of connecting to your router.
+
+**First-boot serial monitor output:**
 
 ```
 === AC Home Assist — Zigbee Hub ===
-WiFi init done, connecting to 'your-wifi-name'
-Got IP: 192.168.x.x
-WiFi connected — syncing time
-Time synced: 2026-04-04 10:30:00
-Zigbee network up — PAN 0x1234 ch 11
-Init complete — hub running
+W wifi: No saved WiFi credentials — starting provisioning AP
+I wifi: SoftAP 'AC-Hub-Setup' started — connect and open http://192.168.4.1
+I wifi: Captive portal ready — waiting for credentials
 ```
 
-If you see `WiFi connection failed after 10 attempts`, double-check the SSID and password in `sdkconfig.defaults` and reflash.
+**Provisioning steps:**
 
-If the time sync times out, the scheduler will still run but the night-setback times may be wrong until the clock is synced.
+1. On your phone or laptop, connect to the **`AC-Hub-Setup`** WiFi network (open, no password).
+2. Open a browser and go to **`http://192.168.4.1`**.
+3. Enter your home WiFi network name (SSID) and password, then click **Connect**.
+4. The hub saves the credentials to flash and restarts automatically.
+
+After the restart the hub connects to your router in normal STA mode. Only WPA2-PSK networks are
+supported. The hub does not support open networks or WPA3-only routers.
+
+To re-run provisioning later (e.g. after moving to a new router), erase the NVS partition:
+
+```bash
+idf.py -p /dev/cu.usbserial-XXXX erase-flash
+# then reflash
+idf.py -p /dev/cu.usbserial-XXXX flash
+```
+
+### Step 5 — Verify the hub booted correctly
+
+After provisioning, subsequent boots show:
+
+```
+=== AC Home Assist — Zigbee Hub ===
+I wifi: Loaded saved credentials for 'your-wifi-name', connecting in STA mode
+I wifi: WiFi STA started, connecting to 'your-wifi-name'
+I wifi: Got IP: 192.168.x.x
+I main: WiFi connected — syncing time
+I main: Time synced: 2026-04-04 10:30:00
+I main: Zigbee network up — PAN 0x1234 ch 11
+I main: Init complete — hub running
+```
+
+If you see `WiFi connection failed after 10 attempts`, re-run provisioning (erase flash and
+reflash as above) and check that you entered the correct SSID and password.
+
+If the time sync times out, the scheduler will still run but the night-setback times may be
+wrong until the clock is synced.
 
 ### Step 6 — Unplug from computer and power via USB charger
 
@@ -259,7 +277,10 @@ The dashboard polls the backend every 30 seconds automatically.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Flash fails, port not found | Wrong port or charge-only cable | Try a different cable; run `ls /dev/cu.usb*` after plugging in |
+| `AC-Hub-Setup` AP never appears | Hub found saved credentials and skipped provisioning | Erase flash (`idf.py erase-flash`) and reflash to reset credentials |
+| Browser can't reach `192.168.4.1` | Connected to wrong network or DNS hijacking | Make sure your device is connected to `AC-Hub-Setup`; try the IP directly |
 | Hub connects to WiFi but backend shows no hub | Wrong backend URL in firmware | Update URL in `http_reporter.c` and reflash |
+| WiFi connection fails after 10 attempts | Wrong credentials entered during provisioning | Erase flash and reflash to restart provisioning |
 | Emitter never joins | Hub not in pairing window | Power-cycle the emitter; check monitor for `Zigbee network up` |
 | Dashboard shows no data | Backend not migrated | Run `python manage.py migrate` and restart |
 | Time sync timed out | NTP blocked by router | Ensure `pool.ntp.org` is reachable on your network |
