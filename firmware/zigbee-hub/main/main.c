@@ -22,14 +22,6 @@
 
 /* ---- Configuration (override via menuconfig / sdkconfig.defaults) ------- */
 
-#ifndef CONFIG_WIFI_SSID
-#define CONFIG_WIFI_SSID     "your-ssid"
-#endif
-
-#ifndef CONFIG_WIFI_PASSWORD
-#define CONFIG_WIFI_PASSWORD "your-password"
-#endif
-
 #ifndef CONFIG_TIMEZONE
 #define CONFIG_TIMEZONE      "EET-2EEST,M3.5.0/3,M10.5.0/4"  /* Sofia, Bulgaria */
 #endif
@@ -135,9 +127,8 @@ void app_main(void)
     /* NVS first — everything else depends on it */
     ESP_ERROR_CHECK(nvs_store_init());
 
-    /* WiFi (non-blocking connect, callbacks handle readiness) */
-    wifi_manager_init(CONFIG_WIFI_SSID, CONFIG_WIFI_PASSWORD,
-                      on_wifi_connected, on_wifi_disconnected);
+    /* WiFi: loads credentials from NVS or starts captive portal for provisioning */
+    wifi_manager_start(on_wifi_connected, on_wifi_disconnected);
 
     /* Zigbee coordinator — starts its own FreeRTOS task */
     zb_coordinator_callbacks_t zb_cb = {
