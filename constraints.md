@@ -11,15 +11,16 @@
 - Relay wear concern: inductive motor loads cause more wear than resistive — but inverter ACs are not a direct motor load at the plug. The relay switches the inverter's input stage (bridge rectifier + capacitors), which is a capacitive/resistive load at mains level. The inverter then soft-starts the compressor internally — no back-EMF, much lower inrush than a fixed-speed motor.
 - Estimated relay life at 2 switches/day: **30–50+ years** for inverter ACs (vs. 10–20 years for fixed-speed). Non-issue in practice.
 
-### Why it doesn't scale as a product
+### Liability and scale
 The 16A rating is not the issue — the issue is liability at scale:
 - If anything goes wrong (house fire, damaged AC), your hardware is in the chain
 - You can't verify customer installation context: worn socket contacts, dodgy wiring, fixed-speed vs. inverter AC
-- "Check your nameplate and socket condition" is not a message you can deliver to every customer
-- The plug is technically sound — the risk is legal, not electrical
+- "Check your nameplate and socket condition" is not a message you can deliver verbally to every customer
+
+**Resolution:** This is addressed through a printed installation guide shipped with the product. The safety condition is simple and binary: if the customer already uses a standard Schuko socket for their AC, the smart plug is a like-for-like replacement — same 16A rating. Anything outside that is explicitly out of scope. This is the same approach used by Shelly, Sonoff, Tapo, and every other smart plug vendor. The installation guide includes a pre-install checklist that documents customer acknowledgment. For property damage claims, this shifts liability to the customer for out-of-spec installations. Bodily injury claims under EU product liability law cannot be fully disclaimed, but the risk profile is identical to the rest of the market.
 
 ### Conclusion
-Smart plug is technically fine — same 16A rating as the socket it plugs into, well within load limits for inverter ACs. Not viable as a shipped product component due to liability exposure at scale, not due to electrical unsuitability.
+Smart plug is technically fine — same 16A rating as the socket it plugs into, well within load limits for inverter ACs. Viable as a shipped product component when accompanied by a clear installation guide with pre-install checklist. Liability exposure is managed through documentation, not avoided by removing the component.
 
 ---
 
@@ -47,9 +48,9 @@ The core value proposition is cost visibility — "tonight cost you 0.42 BGN ins
   - Cannot be done as a simple clip-on install — not viable for mass-market self-install
 - Viable for pro installation tier or technically confident users
 
-### Option 3: Smart plug (monitoring only, personal use)
-- Valid for personal use with known specs
-- Not a scalable product component (see above)
+### Option 3: Smart plug (monitoring only)
+- Valid for any installation where a standard 16A Schuko socket is already in use
+- Scalable as a product component when shipped with a printed installation guide (see above)
 
 ---
 
