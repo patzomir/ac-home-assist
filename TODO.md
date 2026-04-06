@@ -62,6 +62,31 @@
 4. Run hybrid (HTTP events + MQTT commands) until stable
 5. Drop HTTP polling: remove `poll_commands` endpoint; remove `esp_http_client` from firmware
 
+## Backend Workers (APScheduler)
+
+**Depends on:** MQTT broker live + `hub/{hub_id}/status` LWT wired up (so offline detection is event-driven rather than polled).
+
+### Context
+
+`APScheduler` is already in `requirements.txt` but not started. The Django dev server runs as a single process, so a `BackgroundScheduler` started in `AppConfig.ready()` is sufficient for MVP. Production (gunicorn) will need `--preload` or a dedicated worker process.
+
+### Jobs
+
+| Job | Interval | Purpose |
+|-----|----------|---------|
+| `check_hub_liveness` | every 5 min | Set `IREmitter.online = False` and `SmartPlug.online = False` for any hub whose `last_seen` is older than 10 min (covers MQTT LWT not arriving, e.g. power cut) |
+| `cleanup_stale_commands` | every 24 h | Delete `PendingCommand` rows where `delivered=True` and `delivered_at` > 7 days ago |
+
+### Tasks
+
+#### Backend
+- [ ] Create `backend/api/jobs.py`: define `check_hub_liveness()`, `cleanup_stale_commands()`, and `start()` that registers both with `BackgroundScheduler`
+- [ ] Wire `start()` into `backend/api/apps.py` `ApiConfig.ready()` (guard with `os.environ.get("RUN_MAIN")` to avoid double-start under Django's reloader)
+- [ ] Test: set `Hub.last_seen` to 15 min ago in shell → call `check_hub_liveness()` → assert `emitter.online = False`
+
+#### Deployment
+- [ ] Add `--preload` flag to gunicorn invocation (or run APScheduler in a separate `python manage.py runjobs` command) once we move off the dev server
+
 ## Open questions
 
 - Full MQTT (drop HTTP uploads too) vs hybrid (HTTP uploads + MQTT commands)?

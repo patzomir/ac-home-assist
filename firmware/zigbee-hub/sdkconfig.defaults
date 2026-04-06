@@ -22,8 +22,16 @@ CONFIG_ZB_ZCL_SUPPORT_CLUSTER_TIME=y
 CONFIG_ZB_NETWORK_CHANNEL=11
 CONFIG_ZB_COORDINATOR_ALL_MAC_RX_ON_WHEN_IDLE=y
 
-# WiFi power save — off for hub (always on)
+# WiFi/Zigbee coexistence — ESP32-C6 shares one radio between WiFi and 802.15.4.
+# Without these settings the Zigbee receiver is starved during WiFi activity,
+# causing beacon requests from joining devices to be missed entirely.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE=y
+# Disable WiFi power save so the coex arbiter doesn't have to wake the radio
+# for WiFi beacons — gives 802.15.4 more predictable airtime.
 CONFIG_ESP_WIFI_SLP_IRAM_OPT=n
+CONFIG_ESP_WIFI_SLP_DEFAULT_MIN_ACTIVE_TIME=0
+CONFIG_ESP_WIFI_SLP_DEFAULT_MAX_ACTIVE_TIME=0
 
 # HTTPD / HTTP client
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
@@ -39,7 +47,9 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
 
 # Stack sizes
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+CONFIG_ZB_DEBUG_MODE=y

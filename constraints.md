@@ -32,7 +32,7 @@ The core value proposition is cost visibility — "tonight cost you 0.42 BGN ins
 
 ## Energy Monitoring Alternatives
 
-### Option 1: Power estimation (chosen for MVP) ✅
+### Option 1: Power estimation (dropped)
 - Inputs: AC mode + set temperature (known from IR commands) + outdoor temperature (weather API)
 - No additional hardware — works with hub + IR emitter already in the system
 - Inverter ACs behave predictably — consumption is modelable from nameplate figures
@@ -48,11 +48,22 @@ The core value proposition is cost visibility — "tonight cost you 0.42 BGN ins
   - Cannot be done as a simple clip-on install — not viable for mass-market self-install
 - Viable for pro installation tier or technically confident users
 
-### Option 3: Smart plug (monitoring only)
+### Option 3: Smart plug (monitoring only) ✅ MVP — inverter ACs
 - Valid for any installation where a standard 16A Schuko socket is already in use
+- **Nous A7Z** (~23 BGN) — Zigbee, integrates natively with the hub
 - Scalable as a product component when shipped with a printed installation guide (see above)
+- **Not recommended for non-inverter (fixed-speed) ACs** — relay wear is a real concern at 2–4 switches/day with high inrush current
+
+### Option 4: Shelly EM Mini Gen4 ✅ Recommended for non-inverter ACs
+- WiFi energy monitor with CT clamp — **no relay**, no switching in the power path
+- Eliminates relay wear concern entirely — suitable for fixed-speed compressors with high inrush
+- CT clamp installs around a single wire: requires access to separated L and N inside the wall socket box or AC terminal block — not a plug-and-play install, but simpler than a full junction box
+- Connects via Zigbee — integrates through the hub like the Nous A7Z
+- Real measurement; same dashboard integration as the smart plug path
 
 ---
 
 ## Decision
-Power estimation is the MVP approach. No additional hardware, scales to any customer. CT clamp is a pro/add-on tier option for users willing to do proper installation.
+- **Inverter ACs (default):** Smart plug (Nous A7Z, ~23 BGN) — plug-and-play, Zigbee, ships with the kit
+- **Non-inverter ACs:** Shelly EM Mini Gen4 — no relay, Zigbee, requires basic wiring access; recommended when customer confirms fixed-speed compressor
+- Power estimation is dropped. CT clamp (Tuya/Zemismart) remains a pro-tier option.

@@ -36,6 +36,18 @@ esp_err_t nvs_store_save_emitters(const ir_emitter_t *emitters, uint8_t count)
     return ret;
 }
 
+esp_err_t nvs_store_clear_emitters(void)
+{
+    nvs_handle_t h;
+    esp_err_t ret = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (ret != ESP_OK) return ret;
+    ret = nvs_erase_key(h, KEY_EMIT);
+    if (ret == ESP_ERR_NVS_NOT_FOUND) ret = ESP_OK; /* already absent */
+    if (ret == ESP_OK) ret = nvs_commit(h);
+    nvs_close(h);
+    return ret;
+}
+
 esp_err_t nvs_store_load_emitters(ir_emitter_t *emitters, uint8_t *count)
 {
     nvs_handle_t h;

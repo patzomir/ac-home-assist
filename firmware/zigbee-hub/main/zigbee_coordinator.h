@@ -10,11 +10,25 @@
 /* IR emitter (ESP32-H2) uses this endpoint */
 #define IR_EMITTER_ENDPOINT         10
 
-/* Nous A7Z smart plug endpoint */
+/* Nous A7Z smart plug default endpoint (actual value confirmed via ZDO) */
 #define A7Z_PLUG_ENDPOINT           1
+
+/* Tuya manufacturer cluster used by the A7Z for power metering */
+#define TUYA_METERING_CLUSTER_ID    0xe001
+#define TUYA_ATTR_ENERGY_ID         0xd001  /* uint48, Wh          */
+#define TUYA_ATTR_POWER_ID          0xd002  /* uint32, units 0.1 W */
+#define TUYA_ATTR_VOLTAGE_ID        0xd003  /* uint32, units 0.1 V */
+#define TUYA_ATTR_CURRENT_ID        0xd004  /* uint32, units mA    */
 
 /* Temperature: Zigbee represents °C × 100 (int16_t) */
 #define ZB_TEMP(celsius)            ((int16_t)((celsius) * 100))
+
+/* Device type determined via ZDO simple-descriptor discovery */
+typedef enum {
+    DEVICE_UNKNOWN    = 0,
+    DEVICE_IR_EMITTER = 1,
+    DEVICE_SMART_PLUG = 2,
+} device_type_t;
 
 /* Modes sent to IR emitter via thermostat system-mode attribute */
 typedef enum {
@@ -25,31 +39,37 @@ typedef enum {
     AC_MODE_AUTO = 0x01,
 } ac_mode_t;
 
-/* Represents a paired IR emitter node */
+/* Represents any paired Zigbee device (IR emitter or smart plug) */
 typedef struct {
-    uint16_t short_addr;
+    uint16_t      short_addr;
     esp_zb_ieee_addr_t ieee_addr;
-    uint8_t  endpoint;
-    bool     online;
+    uint8_t       endpoint;
+    bool          online;
+    device_type_t device_type;
 } ir_emitter_t;
 
 /* Up to 4 AC units per hub (MVP: 1) */
 #define MAX_EMITTERS 4
 
-/* Power metering reading from a smart plug (Nous A7Z) */
+/* Power metering reading from a smart plug (Nous A7Z, Tuya cluster 0xe001) */
 typedef struct {
     uint16_t short_addr;
     bool     has_power;        /* active_power_w is valid */
-    int16_t  active_power_w;   /* instantaneous power in W (Electrical Measurement cluster) */
-    bool     has_summation;    /* summation_wh is valid */
-    uint64_t summation_wh;     /* raw CurrentSummationDelivered from Metering cluster */
+    int16_t  active_power_w;   /* instantaneous power in W  */
+    bool     has_energy;       /* energy_wh is valid        */
+    uint64_t energy_wh;        /* total energy in Wh        */
+    bool     has_voltage;      /* voltage_dv is valid       */
+    uint32_t voltage_dv;       /* voltage in units of 0.1 V */
+    bool     has_current;      /* current_ma is valid       */
+    uint32_t current_ma;       /* current in mA             */
     uint32_t unix_ts;
 } plug_metering_t;
 
 /* Callbacks fired by the coordinator */
 typedef struct {
     void (*on_network_formed)(uint16_t pan_id, uint8_t channel);
-    void (*on_device_joined)(const ir_emitter_t *emitter);
+    void (*on_device_joined)(const ir_emitter_t *emitter);  /* IR emitter only */
+    void (*on_plug_joined)(const ir_emitter_t *plug);       /* smart plug only */
     void (*on_device_left)(uint16_t short_addr);
     void (*on_cmd_ack)(uint16_t short_addr, bool success);
     void (*on_plug_metering)(const plug_metering_t *reading);
@@ -68,5 +88,8 @@ esp_err_t zb_coordinator_send_setpoint(uint16_t short_addr, int8_t setpoint_c, a
 /* Power off AC via on/off cluster */
 esp_err_t zb_coordinator_send_power(uint16_t short_addr, bool on);
 
-/* Get list of paired emitters */
+/* Get list of paired devices */
 const ir_emitter_t *zb_coordinator_get_emitters(uint8_t *count_out);
+
+/* Remove all paired devices from RAM and NVS */
+esp_err_t zb_coordinator_forget_all(void);

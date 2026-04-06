@@ -23,7 +23,7 @@
 /* ---- Configuration (override via menuconfig / sdkconfig.defaults) ------- */
 
 #ifndef CONFIG_TIMEZONE
-#define CONFIG_TIMEZONE      "EET-2EEST,M3.5.0/3,M10.5.0/4"  /* Sofia, Bulgaria */
+#define CONFIG_TIMEZONE "EET-2EEST,M3.5.0/3,M10.5.0/4" /* Sofia, Bulgaria */
 #endif
 
 static const char *TAG = "main";
@@ -35,25 +35,33 @@ static void on_network_formed(uint16_t pan_id, uint8_t channel)
     ESP_LOGI(TAG, "Zigbee network up — PAN 0x%04x ch %d", pan_id, channel);
 }
 
+static void on_plug_joined(const ir_emitter_t *plug)
+{
+    ESP_LOGI(TAG, "Smart plug joined: 0x%04x ep=%d", plug->short_addr, plug->endpoint);
+    /* Remove any stale thermostat schedule that may exist for this address */
+    ac_schedule_clear(plug->short_addr);
+}
+
 static void on_device_joined(const ir_emitter_t *emitter)
 {
     ESP_LOGI(TAG, "IR emitter joined: 0x%04x", emitter->short_addr);
 
     /* Apply a default night-setback schedule on first join */
     ac_schedule_t sched = {
-        .short_addr     = emitter->short_addr,
-        .mode           = AC_MODE_HEAT,
+        .short_addr = emitter->short_addr,
+        .mode = AC_MODE_HEAT,
         .comfort_temp_c = 21,
         .setback_temp_c = 18,
-        .sleep_hour     = 23,
-        .sleep_min      = 0,
-        .wake_hour      = 7,
-        .wake_min       = 0,
-        .preheat_min    = 45,
+        .sleep_hour = 23,
+        .sleep_min = 0,
+        .wake_hour = 7,
+        .wake_min = 0,
+        .preheat_min = 45,
     };
     /* Only set default if no existing schedule */
     ac_schedule_t existing;
-    if (ac_schedule_get(emitter->short_addr, &existing) != ESP_OK) {
+    if (ac_schedule_get(emitter->short_addr, &existing) != ESP_OK)
+    {
         ac_schedule_set(&sched);
         ESP_LOGI(TAG, "Default schedule applied to 0x%04x", emitter->short_addr);
     }
@@ -66,7 +74,8 @@ static void on_device_left(uint16_t short_addr)
 
 static void on_cmd_ack(uint16_t short_addr, bool success)
 {
-    if (!success) {
+    if (!success)
+    {
         ESP_LOGW(TAG, "Command to 0x%04x was not acknowledged", short_addr);
     }
 }
@@ -78,7 +87,7 @@ static void on_plug_metering(const plug_metering_t *reading)
 
 /* ---- WiFi callbacks ----------------------------------------------------- */
 
-static void on_wifi_connected(void)
+static void wifi_connected_task(void *arg)
 {
     ESP_LOGI(TAG, "WiFi connected — syncing time");
 
@@ -92,25 +101,39 @@ static void on_wifi_connected(void)
 
     /* Wait for time sync (up to 10 s) */
     time_t now = 0;
-    struct tm timeinfo = { 0 };
+    struct tm timeinfo = {0};
     int retries = 0;
-    while (timeinfo.tm_year < (2020 - 1900) && retries < 20) {
+    while (timeinfo.tm_year < (2020 - 1900) && retries < 20)
+    {
         vTaskDelay(pdMS_TO_TICKS(500));
         time(&now);
         localtime_r(&now, &timeinfo);
         retries++;
     }
-    if (timeinfo.tm_year >= (2020 - 1900)) {
+    if (timeinfo.tm_year >= (2020 - 1900))
+    {
         char buf[32];
         strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
         ESP_LOGI(TAG, "Time synced: %s", buf);
-    } else {
+    }
+    else
+    {
         ESP_LOGW(TAG, "Time sync timed out — schedule may fire at wrong time");
     }
 
     /* Start schedule engine after we have a clock */
     ac_schedule_init();
     http_reporter_init();
+
+    vTaskDelete(NULL);
+}
+
+static void on_wifi_connected(void)
+{
+    /* Offload heavy init (blocking SNTP wait, schedule/reporter init) to a
+       dedicated task — on_wifi_connected runs on the sys_evt stack (2 KB)
+       which is too small for this work. */
+    xTaskCreate(wifi_connected_task, "wifi_init", 4096, NULL, 5, NULL);
 }
 
 static void on_wifi_disconnected(void)
@@ -128,15 +151,16 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_store_init());
 
     /* WiFi: loads credentials from NVS or starts captive portal for provisioning */
-    wifi_manager_start(on_wifi_connected, on_wifi_disconnected);
+    // wifi_manager_start(on_wifi_connected, on_wifi_disconnected);
 
     /* Zigbee coordinator — starts its own FreeRTOS task */
     zb_coordinator_callbacks_t zb_cb = {
-        .on_network_formed  = on_network_formed,
-        .on_device_joined   = on_device_joined,
-        .on_device_left     = on_device_left,
-        .on_cmd_ack         = on_cmd_ack,
-        .on_plug_metering   = on_plug_metering,
+        .on_network_formed = on_network_formed,
+        .on_device_joined = on_device_joined,
+        .on_plug_joined = on_plug_joined,
+        .on_device_left = on_device_left,
+        .on_cmd_ack = on_cmd_ack,
+        .on_plug_metering = on_plug_metering,
     };
     ESP_ERROR_CHECK(zb_coordinator_init(&zb_cb));
 

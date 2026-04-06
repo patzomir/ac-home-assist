@@ -8,6 +8,7 @@
 #include <time.h>
 
 static const char *TAG = "reporter";
+static bool s_ready = false;
 
 static const char *mode_str(ac_mode_t m)
 {
@@ -22,13 +23,14 @@ static const char *mode_str(ac_mode_t m)
 
 esp_err_t http_reporter_init(void)
 {
-    /* Nothing to initialise — stateless HTTP client */
+    s_ready = true;
     ESP_LOGI(TAG, "HTTP reporter ready, backend: %s", CONFIG_BACKEND_URL);
     return ESP_OK;
 }
 
 esp_err_t http_reporter_send_event(const ac_event_t *ev)
 {
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
     /* Build JSON body */
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "addr",      ev->short_addr);
@@ -73,18 +75,25 @@ esp_err_t http_reporter_send_event(const ac_event_t *ev)
 
 esp_err_t http_reporter_send_metering(const plug_metering_t *m)
 {
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "addr", m->short_addr);
     cJSON_AddNumberToObject(root, "ts",   m->unix_ts ? m->unix_ts : (uint32_t)time(NULL));
     if (m->has_power) {
         cJSON_AddNumberToObject(root, "active_power_w", m->active_power_w);
     }
-    if (m->has_summation) {
+    if (m->has_energy) {
         /* uint64 doesn't fit in JSON double precisely above 2^53;
            send as string to preserve exact value */
         char buf[24];
-        snprintf(buf, sizeof(buf), "%llu", (unsigned long long)m->summation_wh);
-        cJSON_AddStringToObject(root, "summation_wh", buf);
+        snprintf(buf, sizeof(buf), "%llu", (unsigned long long)m->energy_wh);
+        cJSON_AddStringToObject(root, "energy_wh", buf);
+    }
+    if (m->has_voltage) {
+        cJSON_AddNumberToObject(root, "voltage_dv", m->voltage_dv);
+    }
+    if (m->has_current) {
+        cJSON_AddNumberToObject(root, "current_ma", m->current_ma);
     }
 
     char *body = cJSON_PrintUnformatted(root);
@@ -109,11 +118,10 @@ esp_err_t http_reporter_send_metering(const plug_metering_t *m)
             ESP_LOGW(TAG, "Backend returned HTTP %d for metering", status);
             ret = ESP_FAIL;
         } else {
-            ESP_LOGI(TAG, "Metering reported: addr=0x%04x power=%s%dW sum=%s",
+            ESP_LOGI(TAG, "Metering reported: addr=0x%04x power=%dW energy=%s",
                      m->short_addr,
-                     m->has_power ? "" : "n/a",
                      m->has_power ? m->active_power_w : 0,
-                     m->has_summation ? "present" : "n/a");
+                     m->has_energy ? "present" : "n/a");
         }
     }
 
