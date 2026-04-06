@@ -13,12 +13,19 @@
 /* Nous A7Z smart plug default endpoint (actual value confirmed via ZDO) */
 #define A7Z_PLUG_ENDPOINT           1
 
-/* Tuya manufacturer cluster used by the A7Z for power metering */
-#define TUYA_METERING_CLUSTER_ID    0xe001
-#define TUYA_ATTR_ENERGY_ID         0xd001  /* uint48, Wh          */
-#define TUYA_ATTR_POWER_ID          0xd002  /* uint32, units 0.1 W */
-#define TUYA_ATTR_VOLTAGE_ID        0xd003  /* uint32, units 0.1 V */
-#define TUYA_ATTR_CURRENT_ID        0xd004  /* uint32, units mA    */
+/* Standard ZCL clusters used by Nous A7Z (TS011F-based) for power metering.
+ * Scale factors hard-coded by Zigbee2MQTT for this device class:
+ *   rmsVoltage:  raw / 10  = V  → raw is in 0.1 V  (voltage_dv)
+ *   rmsCurrent:  raw / 1000 = A → raw is in mA      (current_ma)
+ *   activePower: raw / 10  = W  → raw is in 0.1 W
+ *   currentSummDelivered: raw / 100 = kWh → raw * 10 = Wh */
+#define ELEC_MEAS_CLUSTER_ID        0x0B04
+#define ELEC_MEAS_ATTR_VOLTAGE_ID   0x0505  /* rmsVoltage,   int16, raw=0.1 V  */
+#define ELEC_MEAS_ATTR_CURRENT_ID   0x0508  /* rmsCurrent,  uint16, raw=mA     */
+#define ELEC_MEAS_ATTR_POWER_ID     0x050B  /* activePower,  int16, raw=0.1 W  */
+
+#define ZCL_METERING_CLUSTER_ID     0x0702
+#define ZCL_METERING_ATTR_ENERGY_ID 0x0000  /* currentSummDelivered, uint48, raw*10=Wh */
 
 /* Temperature: Zigbee represents °C × 100 (int16_t) */
 #define ZB_TEMP(celsius)            ((int16_t)((celsius) * 100))

@@ -14,10 +14,18 @@ static const char *TAG = "zb_coord";
 static zb_coordinator_callbacks_t s_cb;
 static ir_emitter_t s_emitters[MAX_EMITTERS];
 static uint8_t s_emitter_count = 0;
+static bool s_poll_active = false;
+
+#define PLUG_POLL_INTERVAL_MS 30000
 
 /* ---- forward declarations ----------------------------------------------- */
 
 static void configure_plug_reporting(uint16_t short_addr, uint8_t endpoint);
+static void poll_plugs(uint8_t param);
+static void bind_plug_cluster(uint16_t short_addr,
+                               const esp_zb_ieee_addr_t plug_ieee,
+                               uint8_t endpoint,
+                               uint16_t cluster_id);
 
 /* ---- helpers ------------------------------------------------------------ */
 
@@ -109,8 +117,18 @@ static void on_simple_desc_resp(esp_zb_zdp_status_t status,
         e->online      = true;
 
         if (dtype == DEVICE_SMART_PLUG) {
-            configure_plug_reporting(pj->short_addr, ep);
+            /* Bind standard measurement clusters so the plug reports to the hub.
+               Reporting may be disabled on newer TS011F firmware; poll_plugs is
+               the primary mechanism, but bindings are cheap insurance. */
+            bind_plug_cluster(pj->short_addr, pj->ieee_addr, ep,
+                              ELEC_MEAS_CLUSTER_ID);
+            bind_plug_cluster(pj->short_addr, pj->ieee_addr, ep,
+                              ZCL_METERING_CLUSTER_ID);
             if (s_cb.on_plug_joined) s_cb.on_plug_joined(e);
+            if (!s_poll_active) {
+                s_poll_active = true;
+                esp_zb_scheduler_alarm(poll_plugs, 0, PLUG_POLL_INTERVAL_MS);
+            }
         } else {
             if (s_cb.on_device_joined) s_cb.on_device_joined(e);
         }
@@ -247,16 +265,68 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     }
 }
 
+/* ---- ZDO binding -------------------------------------------------------- */
+
+typedef struct {
+    uint16_t short_addr;
+    uint8_t  endpoint;
+} bind_ctx_t;
+
+static void on_bind_resp(esp_zb_zdp_status_t status, void *user_ctx)
+{
+    bind_ctx_t *ctx = (bind_ctx_t *)user_ctx;
+    if (status == ESP_ZB_ZDP_STATUS_SUCCESS) {
+        ESP_LOGI(TAG, "Bind OK for 0x%04x — configuring reporting", ctx->short_addr);
+        configure_plug_reporting(ctx->short_addr, ctx->endpoint);
+    } else {
+        ESP_LOGW(TAG, "Bind failed for 0x%04x (status=%d) — configuring reporting anyway",
+                 ctx->short_addr, status);
+        configure_plug_reporting(ctx->short_addr, ctx->endpoint);
+    }
+    free(ctx);
+}
+
+static void bind_plug_cluster(uint16_t short_addr,
+                               const esp_zb_ieee_addr_t plug_ieee,
+                               uint8_t endpoint,
+                               uint16_t cluster_id)
+{
+    bind_ctx_t *ctx = malloc(sizeof(bind_ctx_t));
+    if (!ctx) {
+        ESP_LOGE(TAG, "OOM in bind_plug_cluster");
+        configure_plug_reporting(short_addr, endpoint);
+        return;
+    }
+    ctx->short_addr = short_addr;
+    ctx->endpoint   = endpoint;
+
+    esp_zb_ieee_addr_t hub_ieee;
+    esp_zb_get_long_address(hub_ieee);
+
+    esp_zb_zdo_bind_req_param_t req = {
+        .req_dst_addr  = short_addr,
+        .src_endp      = endpoint,
+        .cluster_id    = cluster_id,
+        .dst_addr_mode = 0x03, /* 64-bit IEEE + endpoint */
+        .dst_endp      = HUB_ENDPOINT,
+    };
+    memcpy(req.src_address, plug_ieee, sizeof(esp_zb_ieee_addr_t));
+    memcpy(req.dst_address_u.addr_long, hub_ieee, sizeof(esp_zb_ieee_addr_t));
+
+    ESP_LOGI(TAG, "Binding cluster 0x%04x on 0x%04x → hub", cluster_id, short_addr);
+    esp_zb_zdo_device_bind_req(&req, on_bind_resp, ctx);
+}
+
 /* ---- Attribute reporting configuration ---------------------------------- */
 
 static void configure_plug_reporting(uint16_t short_addr, uint8_t endpoint)
 {
-    /* Tuya 0xe001 — power (0xd002, uint32, 0.1 W): report every 10-60 s or on ≥1 unit change */
-    static uint32_t power_change = 1;
+    /* haElectricalMeasurement (0x0B04) — activePower (0x050B, int16, 0.1 W) */
+    static int16_t power_change = 5;  /* report on ≥0.5 W change */
     esp_zb_zcl_config_report_record_t power_record = {
         .direction         = ESP_ZB_ZCL_REPORT_DIRECTION_SEND,
-        .attributeID       = TUYA_ATTR_POWER_ID,
-        .attrType          = ESP_ZB_ZCL_ATTR_TYPE_U32,
+        .attributeID       = ELEC_MEAS_ATTR_POWER_ID,
+        .attrType          = ESP_ZB_ZCL_ATTR_TYPE_S16,
         .min_interval      = 10,
         .max_interval      = 60,
         .reportable_change = &power_change,
@@ -268,17 +338,17 @@ static void configure_plug_reporting(uint16_t short_addr, uint8_t endpoint)
             .src_endpoint          = HUB_ENDPOINT,
         },
         .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-        .clusterID     = TUYA_METERING_CLUSTER_ID,
+        .clusterID     = ELEC_MEAS_CLUSTER_ID,
         .record_number = 1,
         .record_field  = &power_record,
     };
     esp_zb_zcl_config_report_cmd_req(&power_cmd);
 
-    /* Tuya 0xe001 — energy (0xd001, uint48, Wh): report every 30-300 s or on ≥1 Wh change */
+    /* seMetering (0x0702) — currentSummDelivered (0x0000, uint48) */
     static uint64_t energy_change = 1;
     esp_zb_zcl_config_report_record_t energy_record = {
         .direction         = ESP_ZB_ZCL_REPORT_DIRECTION_SEND,
-        .attributeID       = TUYA_ATTR_ENERGY_ID,
+        .attributeID       = ZCL_METERING_ATTR_ENERGY_ID,
         .attrType          = ESP_ZB_ZCL_ATTR_TYPE_U48,
         .min_interval      = 30,
         .max_interval      = 300,
@@ -291,7 +361,7 @@ static void configure_plug_reporting(uint16_t short_addr, uint8_t endpoint)
             .src_endpoint          = HUB_ENDPOINT,
         },
         .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-        .clusterID     = TUYA_METERING_CLUSTER_ID,
+        .clusterID     = ZCL_METERING_CLUSTER_ID,
         .record_number = 1,
         .record_field  = &energy_record,
     };
@@ -299,6 +369,117 @@ static void configure_plug_reporting(uint16_t short_addr, uint8_t endpoint)
 
     ESP_LOGI(TAG, "Configured attribute reporting for plug 0x%04x ep=%d",
              short_addr, endpoint);
+}
+
+/* ---- Standard ZCL attribute decoders ------------------------------------ */
+
+/* Decodes one haElectricalMeasurement (0x0B04) attribute.
+ * Scale factors for Nous A7Z / TS011F:
+ *   rmsVoltage  (0x0505): raw = 0.1 V  (acVoltageDivisor=10)
+ *   rmsCurrent  (0x0508): raw = mA     (acCurrentDivisor=1000)
+ *   activePower (0x050B): raw = 0.1 W  (acPowerDivisor=10)
+ */
+static bool decode_elec_meas_attr(uint16_t attr_id, const void *value,
+                                   plug_metering_t *m)
+{
+    switch (attr_id) {
+    case ELEC_MEAS_ATTR_POWER_ID: {
+        int16_t raw = *(const int16_t *)value;
+        m->has_power      = true;
+        m->active_power_w = (int16_t)(raw / 10); /* 0.1 W → W */
+        ESP_LOGI(TAG, "Power 0x%04x: raw=%d → %d W", m->short_addr, raw, m->active_power_w);
+        return true;
+    }
+    case ELEC_MEAS_ATTR_VOLTAGE_ID: {
+        uint16_t raw = *(const uint16_t *)value;
+        m->has_voltage = true;
+        m->voltage_dv  = raw; /* raw already in 0.1 V */
+        ESP_LOGI(TAG, "Voltage 0x%04x: raw=%u → %u.%u V",
+                 m->short_addr, raw, raw / 10, raw % 10);
+        return true;
+    }
+    case ELEC_MEAS_ATTR_CURRENT_ID: {
+        uint16_t raw = *(const uint16_t *)value;
+        m->has_current = true;
+        m->current_ma  = raw; /* raw already in mA */
+        ESP_LOGI(TAG, "Current 0x%04x: raw=%u → %u mA", m->short_addr, raw, raw);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+/* Decodes one seMetering (0x0702) attribute.
+ * currentSummDelivered (0x0000): uint48, divisor=100 → raw/100=kWh → raw*10=Wh
+ */
+static bool decode_metering_attr(uint16_t attr_id, const void *value,
+                                  plug_metering_t *m)
+{
+    if (attr_id != ZCL_METERING_ATTR_ENERGY_ID) return false;
+
+    /* uint48 stored little-endian in ZCL (6 bytes) */
+    const uint8_t *b = (const uint8_t *)value;
+    uint64_t raw = 0;
+    for (int i = 5; i >= 0; i--) raw = (raw << 8) | b[i];
+
+    m->has_energy = true;
+    m->energy_wh  = raw * 10; /* raw/100=kWh → raw*10=Wh */
+    ESP_LOGI(TAG, "Energy 0x%04x: raw=%llu → %llu Wh",
+             m->short_addr, (unsigned long long)raw,
+             (unsigned long long)m->energy_wh);
+    return true;
+}
+
+/* ---- Plug polling (runs inside the Zigbee task via scheduler_alarm) ----- */
+
+static uint16_t s_elec_poll_attrs[] = {
+    ELEC_MEAS_ATTR_VOLTAGE_ID,
+    ELEC_MEAS_ATTR_CURRENT_ID,
+    ELEC_MEAS_ATTR_POWER_ID,
+};
+static uint16_t s_metering_poll_attrs[] = {
+    ZCL_METERING_ATTR_ENERGY_ID,
+};
+
+static void poll_plugs(uint8_t param)
+{
+    (void)param;
+    for (int i = 0; i < s_emitter_count; i++) {
+        ir_emitter_t *e = &s_emitters[i];
+        if (e->device_type != DEVICE_SMART_PLUG || !e->online) continue;
+
+        /* Poll haElectricalMeasurement for voltage, current, power */
+        esp_zb_zcl_read_attr_cmd_t elec_cmd = {
+            .zcl_basic_cmd = {
+                .dst_addr_u.addr_short = e->short_addr,
+                .dst_endpoint          = e->endpoint,
+                .src_endpoint          = HUB_ENDPOINT,
+            },
+            .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+            .clusterID    = ELEC_MEAS_CLUSTER_ID,
+            .attr_number  = 3,
+            .attr_field   = s_elec_poll_attrs,
+        };
+        esp_zb_zcl_read_attr_cmd_req(&elec_cmd);
+
+        /* Poll seMetering for cumulative energy */
+        esp_zb_zcl_read_attr_cmd_t meter_cmd = {
+            .zcl_basic_cmd = {
+                .dst_addr_u.addr_short = e->short_addr,
+                .dst_endpoint          = e->endpoint,
+                .src_endpoint          = HUB_ENDPOINT,
+            },
+            .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+            .clusterID    = ZCL_METERING_CLUSTER_ID,
+            .attr_number  = 1,
+            .attr_field   = s_metering_poll_attrs,
+        };
+        esp_zb_zcl_read_attr_cmd_req(&meter_cmd);
+
+        ESP_LOGD(TAG, "Polling plug 0x%04x", e->short_addr);
+    }
+    esp_zb_scheduler_alarm(poll_plugs, 0, PLUG_POLL_INTERVAL_MS);
 }
 
 /* ---- ZCL core action handler (command acks + attribute reports) --------- */
@@ -322,54 +503,45 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
     case ESP_ZB_CORE_REPORT_ATTR_CB_ID: {
         const esp_zb_zcl_report_attr_message_t *msg = message;
         uint16_t addr = msg->src_address.u.short_addr;
+        plug_metering_t m = { .short_addr = addr, .unix_ts = (uint32_t)time(NULL) };
+        bool decoded = false;
 
-        if (msg->cluster != TUYA_METERING_CLUSTER_ID) break;
+        if (msg->cluster == ELEC_MEAS_CLUSTER_ID) {
+            decoded = decode_elec_meas_attr(msg->attribute.id,
+                                            msg->attribute.data.value, &m);
+        } else if (msg->cluster == ZCL_METERING_CLUSTER_ID) {
+            decoded = decode_metering_attr(msg->attribute.id,
+                                           msg->attribute.data.value, &m);
+        } else {
+            const uint8_t *b = (const uint8_t *)msg->attribute.data.value;
+            ESP_LOGD(TAG, "REPORT 0x%04x cluster=0x%04x attr=0x%04x type=0x%02x "
+                          "raw=[%02x %02x %02x %02x]",
+                     addr, msg->cluster, msg->attribute.id, msg->attribute.data.type,
+                     b[0], b[1], b[2], b[3]);
+        }
+        if (decoded && s_cb.on_plug_metering) s_cb.on_plug_metering(&m);
+        break;
+    }
 
-        plug_metering_t m = {
-            .short_addr = addr,
-            .unix_ts    = (uint32_t)time(NULL),
-        };
+    case ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID: {
+        const esp_zb_zcl_cmd_read_attr_resp_message_t *msg = message;
+        uint16_t cluster = msg->info.cluster;
+        if (cluster != ELEC_MEAS_CLUSTER_ID && cluster != ZCL_METERING_CLUSTER_ID) break;
 
-        switch (msg->attribute.id) {
-        case TUYA_ATTR_POWER_ID: {
-            uint32_t raw = *(uint32_t *)msg->attribute.data.value;
-            m.has_power     = true;
-            m.active_power_w = (int16_t)(raw / 10); /* 0.1 W → W */
-            ESP_LOGI(TAG, "Power from 0x%04x: %d W (raw %lu)",
-                     addr, m.active_power_w, (unsigned long)raw);
-            break;
-        }
-        case TUYA_ATTR_ENERGY_ID: {
-            uint64_t raw = 0;
-            memcpy(&raw, msg->attribute.data.value, 6); /* uint48 */
-            m.has_energy = true;
-            m.energy_wh  = raw;
-            ESP_LOGI(TAG, "Energy from 0x%04x: %llu Wh",
-                     addr, (unsigned long long)raw);
-            break;
-        }
-        case TUYA_ATTR_VOLTAGE_ID: {
-            uint32_t raw = *(uint32_t *)msg->attribute.data.value;
-            m.has_voltage  = true;
-            m.voltage_dv   = raw;
-            ESP_LOGI(TAG, "Voltage from 0x%04x: %lu.%lu V",
-                     addr, (unsigned long)(raw / 10), (unsigned long)(raw % 10));
-            break;
-        }
-        case TUYA_ATTR_CURRENT_ID: {
-            uint32_t raw = *(uint32_t *)msg->attribute.data.value;
-            m.has_current = true;
-            m.current_ma  = raw;
-            ESP_LOGI(TAG, "Current from 0x%04x: %lu mA", addr, (unsigned long)raw);
-            break;
-        }
-        default:
-            break;
-        }
-
-        if (s_cb.on_plug_metering && (m.has_power || m.has_energy ||
-                                       m.has_voltage || m.has_current)) {
-            s_cb.on_plug_metering(&m);
+        uint16_t addr = msg->info.src_address.u.short_addr;
+        for (const esp_zb_zcl_read_attr_resp_variable_t *v = msg->variables;
+             v; v = v->next) {
+            if (v->status != ESP_ZB_ZCL_STATUS_SUCCESS) continue;
+            plug_metering_t m = { .short_addr = addr, .unix_ts = (uint32_t)time(NULL) };
+            bool decoded = false;
+            if (cluster == ELEC_MEAS_CLUSTER_ID) {
+                decoded = decode_elec_meas_attr(v->attribute.id,
+                                                v->attribute.data.value, &m);
+            } else {
+                decoded = decode_metering_attr(v->attribute.id,
+                                               v->attribute.data.value, &m);
+            }
+            if (decoded && s_cb.on_plug_metering) s_cb.on_plug_metering(&m);
         }
         break;
     }
