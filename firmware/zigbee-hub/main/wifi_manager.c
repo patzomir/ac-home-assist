@@ -37,6 +37,11 @@ static bool                   s_connected   = false;
 static wifi_connected_cb_t    s_on_connected;
 static wifi_disconnected_cb_t s_on_disconnected;
 
+/* Survives soft reset (esp_restart) but is cleared on power-on.
+ * Used to allow exactly one automatic restart on first boot to let the
+ * RF calibration data settle before the first real connection attempt. */
+static RTC_DATA_ATTR bool s_post_cal_restart_done;
+
 /* ---- NVS helpers -------------------------------------------------------- */
 
 esp_err_t wifi_manager_save_creds(const char *ssid, const char *password)
@@ -71,6 +76,8 @@ static void sta_event_handler(void *arg, esp_event_base_t base,
                                int32_t event_id, void *event_data)
 {
     if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "Disconnected, reason: %d", disc->reason);
         s_connected = false;
         if (s_on_disconnected) s_on_disconnected();
 
@@ -78,6 +85,16 @@ static void sta_event_handler(void *arg, esp_event_base_t base,
             esp_wifi_connect();
             s_retry_count++;
             ESP_LOGI(TAG, "Reconnecting… attempt %d", s_retry_count);
+        } else if (!s_post_cal_restart_done) {
+            /* First-boot RF calibration leaves a high noise floor that hides
+             * the AP (WIFI_REASON_NO_AP_FOUND).  One soft restart loads the
+             * freshly-written calibration data and fixes reception.
+             * s_post_cal_restart_done is RTC_DATA_ATTR so it survives this
+             * restart but is cleared on the next power-on. */
+            s_post_cal_restart_done = true;
+            ESP_LOGW(TAG, "WiFi scan failed on first boot — restarting once for RF cal");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            esp_restart();
         } else {
             ESP_LOGE(TAG, "WiFi connection failed after %d attempts", WIFI_MAX_RETRIES);
         }
@@ -114,6 +131,10 @@ static void start_sta(const char *ssid, const char *password)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* Disable power save so the coex arbiter gives Zigbee predictable airtime.
+       With power save on, the radio locks to WiFi beacon windows and starves
+       the 802.15.4 receiver on this shared-radio chip (ESP32-C6). */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     esp_wifi_connect();
 
     ESP_LOGI(TAG, "WiFi STA started, connecting to '%s'", ssid);

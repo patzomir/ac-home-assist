@@ -151,7 +151,7 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_store_init());
 
     /* WiFi: loads credentials from NVS or starts captive portal for provisioning */
-    // wifi_manager_start(on_wifi_connected, on_wifi_disconnected);
+    wifi_manager_start(on_wifi_connected, on_wifi_disconnected);
 
     /* Zigbee coordinator — starts its own FreeRTOS task */
     zb_coordinator_callbacks_t zb_cb = {

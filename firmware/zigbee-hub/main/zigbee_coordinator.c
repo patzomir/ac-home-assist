@@ -212,6 +212,22 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             }
             /* Immediately open joining for 3 minutes on first boot */
             esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
+
+            /* Smart plugs that survived a hub reboot stay associated and keep
+               sending bound attribute reports, but never send a device-announce
+               (they think they're already joined).  Start polling them now so
+               we don't rely on an announce that will never come. */
+            if (!s_poll_active) {
+                for (int i = 0; i < s_emitter_count; i++) {
+                    if (s_emitters[i].device_type == DEVICE_SMART_PLUG) {
+                        s_poll_active = true;
+                        /* Short delay so the network is fully up before the
+                           first poll goes out. */
+                        esp_zb_scheduler_alarm(poll_plugs, 0, 10000);
+                        break;
+                    }
+                }
+            }
         }
         break;
 
@@ -447,7 +463,7 @@ static void poll_plugs(uint8_t param)
     (void)param;
     for (int i = 0; i < s_emitter_count; i++) {
         ir_emitter_t *e = &s_emitters[i];
-        if (e->device_type != DEVICE_SMART_PLUG || !e->online) continue;
+        if (e->device_type != DEVICE_SMART_PLUG) continue;
 
         /* Poll haElectricalMeasurement for voltage, current, power */
         esp_zb_zcl_read_attr_cmd_t elec_cmd = {
@@ -529,6 +545,15 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
         if (cluster != ELEC_MEAS_CLUSTER_ID && cluster != ZCL_METERING_CLUSTER_ID) break;
 
         uint16_t addr = msg->info.src_address.u.short_addr;
+
+        /* A poll response means the device is reachable — mark it online so the
+           scheduler can send it setpoints even if it never sent a device-announce. */
+        ir_emitter_t *resp_e = find_emitter_by_addr(addr);
+        if (resp_e && !resp_e->online) {
+            ESP_LOGI(TAG, "0x%04x responded to poll — marking online", addr);
+            resp_e->online = true;
+        }
+
         for (const esp_zb_zcl_read_attr_resp_variable_t *v = msg->variables;
              v; v = v->next) {
             if (v->status != ESP_ZB_ZCL_STATUS_SUCCESS) continue;
