@@ -16,7 +16,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "corsheaders",
-    "api",
+    "api.apps.ApiConfig",
 ]
 
 MIDDLEWARE = [
@@ -62,6 +62,11 @@ REST_FRAMEWORK = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+# --- MQTT settings ------------------------------------------------------------
+
+MQTT_BROKER_HOST = os.environ.get("MQTT_BROKER_HOST", "localhost")
+MQTT_BROKER_PORT = int(os.environ.get("MQTT_BROKER_PORT", "1883"))
 
 # --- Project settings ---------------------------------------------------------
 

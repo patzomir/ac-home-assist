@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from .models import Hub, IREmitter, ACEvent, Schedule, PendingCommand, SmartPlug, SmartPlugEvent
 from .energy_model import estimate_watts, compute_interval_cost
 from .weather import get_outdoor_temp
+from . import mqtt_manager
 
 logger = logging.getLogger(__name__)
 
@@ -370,22 +371,24 @@ def _schedule_to_dict(s: Schedule) -> dict:
 
 
 def _queue_schedule_command(hub: Hub, emitter: IREmitter, s: Schedule):
-    PendingCommand.objects.create(
+    payload = {
+        "addr":            emitter.short_addr,
+        "mode":            s.mode,
+        "comfort_temp_c":  s.comfort_temp_c,
+        "setback_temp_c":  s.setback_temp_c,
+        "sleep_hour":      s.sleep_hour,
+        "sleep_minute":    s.sleep_minute,
+        "wake_hour":       s.wake_hour,
+        "wake_minute":     s.wake_minute,
+        "preheat_minutes": s.preheat_minutes,
+        "enabled":         s.enabled,
+    }
+    cmd = PendingCommand.objects.create(
         hub=hub,
         command_type="set_schedule",
-        payload={
-            "addr":            emitter.short_addr,
-            "mode":            s.mode,
-            "comfort_temp_c":  s.comfort_temp_c,
-            "setback_temp_c":  s.setback_temp_c,
-            "sleep_hour":      s.sleep_hour,
-            "sleep_minute":    s.sleep_minute,
-            "wake_hour":       s.wake_hour,
-            "wake_minute":     s.wake_minute,
-            "preheat_minutes": s.preheat_minutes,
-            "enabled":         s.enabled,
-        },
+        payload=payload,
     )
+    mqtt_manager.publish_command(hub.identifier, cmd.id, cmd.command_type, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -539,12 +542,14 @@ def control_plug(request, plug_id):
         return Response({"error": "not found"}, status=404)
 
     power_on = bool(request.data.get("power", True))
+    payload = {"addr": plug.short_addr, "power": power_on}
 
-    PendingCommand.objects.create(
+    cmd = PendingCommand.objects.create(
         hub=plug.hub,
         command_type="set_plug",
-        payload={"addr": plug.short_addr, "power": power_on},
+        payload=payload,
     )
+    mqtt_manager.publish_command(plug.hub.identifier, cmd.id, cmd.command_type, payload)
 
     return Response({"queued": True, "power": power_on})
 
