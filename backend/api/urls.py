@@ -7,6 +7,9 @@ urlpatterns = [
     path("hubs/<str:hub_id>/heartbeat/",     views.hub_heartbeat,   name="hub-heartbeat"),
     path("hubs/<str:hub_id>/commands/",      views.poll_commands,   name="poll-commands"),
 
+    # Hub management
+    path("hubs/pk/<int:hub_pk>/",            views.update_hub,      name="update-hub"),
+
     # Dashboard data
     path("dashboard/",                       views.dashboard_data,  name="dashboard-data"),
 

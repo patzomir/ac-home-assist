@@ -291,8 +291,22 @@ def dashboard_data(request):
                 "daily": _plug_daily_breakdown(plug, days=7),
             })
 
+    hubs_list = []
+    for hub in hubs:
+        is_online = hub.last_seen and (now - hub.last_seen).total_seconds() < 300
+        hubs_list.append({
+            "id":            hub.id,
+            "name":          hub.name,
+            "identifier":    hub.identifier,
+            "online":        bool(is_online),
+            "last_seen":     hub.last_seen.isoformat() if hub.last_seen else None,
+            "emitter_count": hub.emitters.count(),
+            "plug_count":    hub.plugs.count(),
+        })
+
     return Response({
         "outdoor_temp_c": outdoor_temp,
+        "hubs":  hubs_list,
         "units": units,
         "plugs": plugs,
         "server_time": now.isoformat(),
@@ -533,6 +547,24 @@ def control_plug(request, plug_id):
     )
 
     return Response({"queued": True, "power": power_on})
+
+
+# ---------------------------------------------------------------------------
+# Hub name update
+# ---------------------------------------------------------------------------
+
+@api_view(["PATCH"])
+def update_hub(request, hub_pk):
+    try:
+        hub = Hub.objects.get(pk=hub_pk)
+    except Hub.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    if "name" in request.data:
+        hub.name = request.data["name"][:128]
+        hub.save(update_fields=["name"])
+
+    return Response({"id": hub.id, "name": hub.name})
 
 
 # ---------------------------------------------------------------------------

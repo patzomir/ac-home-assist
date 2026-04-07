@@ -189,6 +189,48 @@
                  border: 1px solid var(--border); }
   .save-status { font-size: 12px; color: var(--green); }
 
+  /* --- Device type badge --- */
+  .type-badge {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .6px; padding: 2px 7px; border-radius: 4px;
+    color: var(--muted); background: rgba(107,114,128,.15);
+    flex-shrink: 0;
+  }
+
+  /* --- Hub section --- */
+  .section-label {
+    font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .8px; margin: 0 0 10px;
+  }
+  .hubs-row {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    margin-bottom: 24px;
+  }
+  .hub-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    display: flex; align-items: center; gap: 12px;
+    min-width: 260px;
+  }
+  .hub-card .hub-info { flex: 1; min-width: 0; }
+  .hub-card .hub-name {
+    font-size: 14px; font-weight: 600;
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .hub-card .hub-name:hover { color: var(--accent); }
+  .hub-card .hub-meta {
+    font-size: 11px; color: var(--muted); margin-top: 3px;
+    font-family: monospace;
+  }
+  .hub-card .hub-devices {
+    font-size: 11px; color: var(--text2); margin-top: 4px;
+  }
+
+  /* --- Section headers --- */
+  .devices-section { margin-bottom: 28px; }
+
   /* --- Empty state --- */
   .empty {
     text-align: center; padding: 80px 20px;
@@ -220,9 +262,25 @@
     <span class="refresh-indicator" id="refresh-label">Refreshing…</span>
   </div>
 
-  <div class="units-grid" id="units-grid">
-    <div class="empty"><div class="icon">📡</div>Waiting for hub data…</div>
+  <!-- Hub status row -->
+  <div id="hubs-section" style="display:none">
+    <p class="section-label">Hubs</p>
+    <div class="hubs-row" id="hubs-row"></div>
   </div>
+
+  <!-- AC units -->
+  <div id="units-section" class="devices-section" style="display:none">
+    <p class="section-label">AC Units (IR Emitters)</p>
+    <div class="units-grid" id="units-grid"></div>
+  </div>
+
+  <!-- Smart plugs -->
+  <div id="plugs-section" class="devices-section" style="display:none">
+    <p class="section-label">Smart Plugs</p>
+    <div class="units-grid" id="plugs-grid"></div>
+  </div>
+
+  <div class="empty" id="empty-state"><div class="icon">📡</div>Waiting for hub data…</div>
 </main>
 
 <script>
@@ -233,7 +291,7 @@
 const API = '/api';
 const REFRESH_MS = 30_000;
 
-const charts = {};       // emitter_id → Chart instance
+const charts = {};       // canvas_id → Chart instance
 const saveStatus = {};   // emitter_id → timeout
 
 /* ---------- fetch + render loop ---------- */
@@ -269,34 +327,92 @@ function render(data) {
   document.getElementById('outdoor-label').textContent =
     ot !== null ? `Outdoor: ${ot.toFixed(1)} °C` : 'Outdoor: —';
 
-  const grid = document.getElementById('units-grid');
-  const hasUnits = data.units && data.units.length > 0;
-  const hasPlugs = data.plugs && data.plugs.length > 0;
+  const hasHubs  = data.hubs  && data.hubs.length  > 0;
+  const hasUnits = data.units && data.units.length  > 0;
+  const hasPlugs = data.plugs && data.plugs.length  > 0;
 
-  if (!hasUnits && !hasPlugs) {
-    grid.innerHTML = `<div class="empty"><div class="icon">📡</div>No devices paired yet.<br>Power on the hub and pair an IR emitter.</div>`;
+  const emptyState = document.getElementById('empty-state');
+  if (!hasHubs && !hasUnits && !hasPlugs) {
+    emptyState.style.display = '';
     return;
   }
+  emptyState.style.display = 'none';
 
-  /* clear empty state if present */
-  if (grid.querySelector('.empty')) grid.innerHTML = '';
-
-  /* ensure a card per unit */
-  if (hasUnits) {
-    const existingIds = new Set([...grid.querySelectorAll('[data-unit-id]')].map(el => el.dataset.unitId));
-    data.units.forEach(u => {
-      if (!existingIds.has(String(u.id))) grid.appendChild(buildCard(u));
+  /* hubs */
+  const hubsSection = document.getElementById('hubs-section');
+  const hubsRow = document.getElementById('hubs-row');
+  if (hasHubs) {
+    hubsSection.style.display = '';
+    const existingHubIds = new Set([...hubsRow.querySelectorAll('[data-hub-id]')].map(el => el.dataset.hubId));
+    data.hubs.forEach(h => {
+      if (!existingHubIds.has(String(h.id))) hubsRow.appendChild(buildHubCard(h));
     });
-    data.units.forEach(u => updateCard(u));
+    data.hubs.forEach(h => updateHubCard(h));
+  } else {
+    hubsSection.style.display = 'none';
   }
 
-  /* ensure a card per plug */
+  /* AC units */
+  const unitsSection = document.getElementById('units-section');
+  const unitsGrid = document.getElementById('units-grid');
+  if (hasUnits) {
+    unitsSection.style.display = '';
+    const existingIds = new Set([...unitsGrid.querySelectorAll('[data-unit-id]')].map(el => el.dataset.unitId));
+    data.units.forEach(u => {
+      if (!existingIds.has(String(u.id))) unitsGrid.appendChild(buildCard(u));
+    });
+    data.units.forEach(u => updateCard(u));
+  } else {
+    unitsSection.style.display = 'none';
+  }
+
+  /* smart plugs */
+  const plugsSection = document.getElementById('plugs-section');
+  const plugsGrid = document.getElementById('plugs-grid');
   if (hasPlugs) {
-    const existingPlugIds = new Set([...grid.querySelectorAll('[data-plug-id]')].map(el => el.dataset.plugId));
+    plugsSection.style.display = '';
+    const existingPlugIds = new Set([...plugsGrid.querySelectorAll('[data-plug-id]')].map(el => el.dataset.plugId));
     data.plugs.forEach(p => {
-      if (!existingPlugIds.has(String(p.id))) grid.appendChild(buildPlugCard(p));
+      if (!existingPlugIds.has(String(p.id))) plugsGrid.appendChild(buildPlugCard(p));
     });
     data.plugs.forEach(p => updatePlugCard(p));
+  } else {
+    plugsSection.style.display = 'none';
+  }
+}
+
+/* ---------- hub cards ---------- */
+
+function buildHubCard(h) {
+  const card = document.createElement('div');
+  card.className = 'hub-card';
+  card.dataset.hubId = h.id;
+  card.innerHTML = `
+    <div class="dot offline" id="hub-dot-${h.id}"></div>
+    <div class="hub-info">
+      <div class="hub-name" id="hub-name-${h.id}" title="Click to rename">${esc(h.name)}</div>
+      <div class="hub-meta" id="hub-id-${h.id}">${esc(h.identifier.slice(0, 16))}</div>
+      <div class="hub-devices" id="hub-devices-${h.id}"></div>
+    </div>
+    <span class="type-badge">Hub</span>
+  `;
+  card.querySelector(`#hub-name-${h.id}`).addEventListener('click', () => renameHub(h.id));
+  return card;
+}
+
+function updateHubCard(h) {
+  const dot = document.getElementById(`hub-dot-${h.id}`);
+  if (dot) dot.classList.toggle('offline', !h.online);
+
+  const nameEl = document.getElementById(`hub-name-${h.id}`);
+  if (nameEl) nameEl.textContent = h.name;
+
+  const devEl = document.getElementById(`hub-devices-${h.id}`);
+  if (devEl) {
+    const parts = [];
+    if (h.emitter_count > 0) parts.push(`${h.emitter_count} IR emitter${h.emitter_count > 1 ? 's' : ''}`);
+    if (h.plug_count > 0)    parts.push(`${h.plug_count} plug${h.plug_count > 1 ? 's' : ''}`);
+    devEl.textContent = parts.length ? parts.join(', ') : 'No devices paired';
   }
 }
 
@@ -311,6 +427,7 @@ function buildCard(u) {
       <div class="dot offline" id="dot-${u.id}"></div>
       <h2 id="name-${u.id}" data-emitter-id="${u.id}"
           title="Click to rename" style="cursor:pointer">${esc(u.name)}</h2>
+      <span class="type-badge">IR Emitter</span>
       <span class="unit-addr">${esc(u.addr)}</span>
     </div>
 
@@ -578,6 +695,7 @@ function buildPlugCard(p) {
       <div class="dot offline" id="plug-dot-${p.id}"></div>
       <h2 id="plug-name-${p.id}" data-plug-id="${p.id}"
           title="Click to rename" style="cursor:pointer">${esc(p.name)}</h2>
+      <span class="type-badge">Smart Plug</span>
       <span class="unit-addr">${esc(p.addr)}</span>
     </div>
 
@@ -659,6 +777,24 @@ function updatePlugCard(p) {
 }
 
 /* ---------- rename ---------- */
+
+async function renameHub(hubId) {
+  const nameEl = document.getElementById(`hub-name-${hubId}`);
+  if (!nameEl) return;
+  const current = nameEl.textContent;
+  const newName = prompt('Rename hub:', current);
+  if (!newName || newName === current) return;
+
+  try {
+    const res = await fetch(`${API}/hubs/pk/${hubId}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (!res.ok) throw new Error(res.status);
+    nameEl.textContent = newName;
+  } catch (_) {}
+}
 
 async function renameEmitter(emitterId) {
   const nameEl = document.getElementById(`name-${emitterId}`);
