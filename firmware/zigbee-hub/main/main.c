@@ -4,6 +4,7 @@
  * Roles:
  *   - Zigbee Coordinator: forms the network, pairs ESP32-H2 IR emitters
  *   - WiFi STA: reports AC events to backend HTTP API
+ *   - MQTT client: receives commands from backend instantly (no polling)
  *   - Scheduler: applies night-setback / preheat schedule via esp_timer
  *
  * Build: idf.py -p /dev/cu.usbserial-XXXX flash monitor
@@ -13,12 +14,16 @@
 #include "wifi_manager.h"
 #include "ac_schedule.h"
 #include "http_reporter.h"
+#include "hub_mqtt.h"
 #include "nvs_store.h"
 
 #include "esp_log.h"
 #include "esp_sntp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "cJSON.h"
+
+#include <string.h>
 
 /* ---- Configuration (override via menuconfig / sdkconfig.defaults) ------- */
 
@@ -27,6 +32,131 @@
 #endif
 
 static const char *TAG = "main";
+
+/* ---------------------------------------------------------------------------
+ * MQTT command dispatch
+ * -------------------------------------------------------------------------*/
+
+static ac_mode_t parse_mode(const char *s)
+{
+    if (!s)                      return AC_MODE_HEAT;
+    if (strcmp(s, "cool") == 0)  return AC_MODE_COOL;
+    if (strcmp(s, "fan")  == 0)  return AC_MODE_FAN;
+    if (strcmp(s, "auto") == 0)  return AC_MODE_AUTO;
+    if (strcmp(s, "off")  == 0)  return AC_MODE_OFF;
+    return AC_MODE_HEAT;
+}
+
+static void handle_set_schedule(const cJSON *payload)
+{
+    cJSON *addr_item = cJSON_GetObjectItemCaseSensitive(payload, "addr");
+    if (!cJSON_IsNumber(addr_item))
+    {
+        ESP_LOGW(TAG, "set_schedule: missing addr");
+        return;
+    }
+
+    ac_schedule_t sched = {
+        .short_addr     = (uint16_t)addr_item->valuedouble,
+        .mode           = parse_mode(cJSON_GetStringValue(
+                              cJSON_GetObjectItemCaseSensitive(payload, "mode"))),
+        .comfort_temp_c = 21,
+        .setback_temp_c = 18,
+        .sleep_hour     = 23,
+        .sleep_min      = 0,
+        .wake_hour      = 7,
+        .wake_min       = 0,
+        .preheat_min    = 45,
+    };
+
+#define _INT(key, field) \
+    do { cJSON *_i = cJSON_GetObjectItemCaseSensitive(payload, key); \
+         if (cJSON_IsNumber(_i)) sched.field = (uint8_t)_i->valuedouble; } while(0)
+
+    _INT("comfort_temp_c",  comfort_temp_c);
+    _INT("setback_temp_c",  setback_temp_c);
+    _INT("sleep_hour",      sleep_hour);
+    _INT("sleep_minute",    sleep_min);
+    _INT("wake_hour",       wake_hour);
+    _INT("wake_minute",     wake_min);
+    _INT("preheat_minutes", preheat_min);
+#undef _INT
+
+    cJSON *enabled = cJSON_GetObjectItemCaseSensitive(payload, "enabled");
+    if (cJSON_IsFalse(enabled))
+    {
+        ac_schedule_clear(sched.short_addr);
+        ESP_LOGI(TAG, "Schedule disabled for 0x%04x", sched.short_addr);
+    }
+    else
+    {
+        ac_schedule_set(&sched);
+        ESP_LOGI(TAG, "Schedule updated for 0x%04x (sleep %02d:%02d → %d°C, "
+                      "wake %02d:%02d → %d°C)",
+                 sched.short_addr,
+                 sched.sleep_hour, sched.sleep_min, sched.setback_temp_c,
+                 sched.wake_hour,  sched.wake_min,  sched.comfort_temp_c);
+    }
+}
+
+static void handle_set_ac(const cJSON *payload)
+{
+    cJSON *addr_item = cJSON_GetObjectItemCaseSensitive(payload, "addr");
+    if (!cJSON_IsNumber(addr_item))
+    {
+        ESP_LOGW(TAG, "set_ac: missing addr");
+        return;
+    }
+    uint16_t addr = (uint16_t)addr_item->valuedouble;
+
+    cJSON *power_item = cJSON_GetObjectItemCaseSensitive(payload, "power");
+    bool power_on = !cJSON_IsFalse(power_item);  /* default on */
+
+    if (!power_on)
+    {
+        zb_coordinator_send_power(addr, false);
+        ESP_LOGI(TAG, "set_ac: 0x%04x → OFF", addr);
+        return;
+    }
+
+    ac_mode_t mode = parse_mode(cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(payload, "mode")));
+    int8_t setpoint_c = 21;
+    cJSON *sp = cJSON_GetObjectItemCaseSensitive(payload, "setpoint");
+    if (cJSON_IsNumber(sp))
+        setpoint_c = (int8_t)sp->valuedouble;
+
+    zb_coordinator_send_setpoint(addr, setpoint_c, mode);
+    ESP_LOGI(TAG, "set_ac: 0x%04x → %d°C mode=%d", addr, setpoint_c, mode);
+}
+
+static void handle_set_plug(const cJSON *payload)
+{
+    cJSON *addr_item  = cJSON_GetObjectItemCaseSensitive(payload, "addr");
+    cJSON *power_item = cJSON_GetObjectItemCaseSensitive(payload, "power");
+    if (!cJSON_IsNumber(addr_item))
+    {
+        ESP_LOGW(TAG, "set_plug: missing addr");
+        return;
+    }
+    uint16_t addr    = (uint16_t)addr_item->valuedouble;
+    bool     power_on = !cJSON_IsFalse(power_item);
+
+    zb_coordinator_send_power(addr, power_on);
+    ESP_LOGI(TAG, "set_plug: 0x%04x → %s", addr, power_on ? "ON" : "OFF");
+}
+
+static void on_mqtt_command(int cmd_id, const char *type, const cJSON *payload)
+{
+    if (strcmp(type, "set_schedule") == 0)
+        handle_set_schedule(payload);
+    else if (strcmp(type, "set_ac") == 0)
+        handle_set_ac(payload);
+    else if (strcmp(type, "set_plug") == 0)
+        handle_set_plug(payload);
+    else
+        ESP_LOGW(TAG, "Unknown command type: %s (id=%d)", type, cmd_id);
+}
 
 /* ---- Zigbee coordinator callbacks --------------------------------------- */
 
@@ -121,16 +251,17 @@ static void wifi_connected_task(void *arg)
         ESP_LOGW(TAG, "Time sync timed out — schedule may fire at wrong time");
     }
 
-    /* Start schedule engine after we have a clock */
+    /* Start subsystems that need a working clock and network */
     ac_schedule_init();
     http_reporter_init();
+    hub_mqtt_init(on_mqtt_command);
 
     vTaskDelete(NULL);
 }
 
 static void on_wifi_connected(void)
 {
-    /* Offload heavy init (blocking SNTP wait, schedule/reporter init) to a
+    /* Offload heavy init (blocking SNTP wait, schedule/reporter/MQTT init) to a
        dedicated task — on_wifi_connected runs on the sys_evt stack (2 KB)
        which is too small for this work. */
     xTaskCreate(wifi_connected_task, "wifi_init", 4096, NULL, 5, NULL);
@@ -139,6 +270,7 @@ static void on_wifi_connected(void)
 static void on_wifi_disconnected(void)
 {
     ESP_LOGW(TAG, "WiFi disconnected — reporting paused");
+    /* MQTT client handles its own reconnection internally */
 }
 
 /* ---- app_main ----------------------------------------------------------- */

@@ -5,6 +5,7 @@ idf_component_register(
         "wifi_manager.c"
         "ac_schedule.c"
         "http_reporter.c"
+        "hub_mqtt.c"
         "nvs_store.c"
     INCLUDE_DIRS "."
     REQUIRES
@@ -12,6 +13,7 @@ idf_component_register(
         esp_wifi
         esp_http_client
         esp_http_server
+        mqtt
         nvs_flash
         lwip
         esp_timer
