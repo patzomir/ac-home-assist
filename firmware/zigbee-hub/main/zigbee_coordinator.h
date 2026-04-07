@@ -53,6 +53,7 @@ typedef struct {
     uint8_t       endpoint;
     bool          online;
     device_type_t device_type;
+    uint8_t       missed_polls;         /* consecutive unanswered poll cycles */
 } ir_emitter_t;
 
 /* Up to 4 AC units per hub (MVP: 1) */

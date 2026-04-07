@@ -270,8 +270,10 @@ function render(data) {
     ot !== null ? `Outdoor: ${ot.toFixed(1)} °C` : 'Outdoor: —';
 
   const grid = document.getElementById('units-grid');
+  const hasUnits = data.units && data.units.length > 0;
+  const hasPlugs = data.plugs && data.plugs.length > 0;
 
-  if (!data.units || data.units.length === 0) {
+  if (!hasUnits && !hasPlugs) {
     grid.innerHTML = `<div class="empty"><div class="icon">📡</div>No devices paired yet.<br>Power on the hub and pair an IR emitter.</div>`;
     return;
   }
@@ -280,15 +282,22 @@ function render(data) {
   if (grid.querySelector('.empty')) grid.innerHTML = '';
 
   /* ensure a card per unit */
-  const existingIds = new Set([...grid.querySelectorAll('[data-unit-id]')].map(el => el.dataset.unitId));
-  data.units.forEach(u => {
-    if (!existingIds.has(String(u.id))) {
-      grid.appendChild(buildCard(u));
-    }
-  });
+  if (hasUnits) {
+    const existingIds = new Set([...grid.querySelectorAll('[data-unit-id]')].map(el => el.dataset.unitId));
+    data.units.forEach(u => {
+      if (!existingIds.has(String(u.id))) grid.appendChild(buildCard(u));
+    });
+    data.units.forEach(u => updateCard(u));
+  }
 
-  /* update each card */
-  data.units.forEach(u => updateCard(u));
+  /* ensure a card per plug */
+  if (hasPlugs) {
+    const existingPlugIds = new Set([...grid.querySelectorAll('[data-plug-id]')].map(el => el.dataset.plugId));
+    data.plugs.forEach(p => {
+      if (!existingPlugIds.has(String(p.id))) grid.appendChild(buildPlugCard(p));
+    });
+    data.plugs.forEach(p => updatePlugCard(p));
+  }
 }
 
 /* ---------- card DOM ---------- */
@@ -432,13 +441,13 @@ function updateCard(u) {
   setText(`month-${u.id}`,  fmt(cost.month_bgn));
 
   /* chart */
-  updateChart(u.id, u.daily || []);
+  updateChart(`chart-${u.id}`, u.daily || []);
 }
 
 /* ---------- chart ---------- */
 
-function updateChart(id, daily) {
-  const canvas = document.getElementById(`chart-${id}`);
+function updateChart(canvasId, daily) {
+  const canvas = document.getElementById(canvasId);
   if (!canvas) return;
 
   const labels = daily.map(d => d.date);
@@ -451,15 +460,15 @@ function updateChart(id, daily) {
     : 'rgba(34,197,94,0.75)'
   );
 
-  if (charts[id]) {
-    charts[id].data.labels = labels;
-    charts[id].data.datasets[0].data = values;
-    charts[id].data.datasets[0].backgroundColor = barColors;
-    charts[id].update('none');
+  if (charts[canvasId]) {
+    charts[canvasId].data.labels = labels;
+    charts[canvasId].data.datasets[0].data = values;
+    charts[canvasId].data.datasets[0].backgroundColor = barColors;
+    charts[canvasId].update('none');
     return;
   }
 
-  charts[id] = new Chart(canvas, {
+  charts[canvasId] = new Chart(canvas, {
     type: 'bar',
     data: {
       labels,
@@ -558,6 +567,97 @@ function showSaveStatus(emitterId, msg) {
   saveStatus[emitterId] = setTimeout(() => { el.textContent = ''; }, 4000);
 }
 
+/* ---------- plug cards ---------- */
+
+function buildPlugCard(p) {
+  const card = document.createElement('div');
+  card.className = 'unit-card';
+  card.dataset.plugId = p.id;
+  card.innerHTML = `
+    <div class="unit-header">
+      <div class="dot offline" id="plug-dot-${p.id}"></div>
+      <h2 id="plug-name-${p.id}" data-plug-id="${p.id}"
+          title="Click to rename" style="cursor:pointer">${esc(p.name)}</h2>
+      <span class="unit-addr">${esc(p.addr)}</span>
+    </div>
+
+    <div class="current-row">
+      <div>
+        <div class="power-big" id="plug-watts-${p.id}">—<span class="unit-label"> W</span></div>
+        <div class="setpoint-line" id="plug-status-${p.id}"></div>
+      </div>
+      <div>
+        <span class="mode-badge mode-off" id="plug-badge-${p.id}">off</span>
+      </div>
+      <div class="session-cost">
+        <div class="amount" id="plug-session-cost-${p.id}">—</div>
+        <div class="label">BGN · session</div>
+        <div class="sub" id="plug-session-kwh-${p.id}"></div>
+      </div>
+    </div>
+
+    <div class="cost-row">
+      <div class="cost-cell">
+        <div class="amount" id="plug-today-${p.id}">—</div>
+        <div class="label">BGN today</div>
+        <div class="sub" id="plug-today-kwh-${p.id}"></div>
+      </div>
+      <div class="cost-cell">
+        <div class="amount" id="plug-week-${p.id}">—</div>
+        <div class="label">BGN this week</div>
+      </div>
+      <div class="cost-cell">
+        <div class="amount" id="plug-month-${p.id}">—</div>
+        <div class="label">BGN this month</div>
+      </div>
+    </div>
+
+    <div class="chart-section">
+      <h3>7-day consumption (BGN/day)</h3>
+      <div class="chart-wrap"><canvas id="plug-chart-${p.id}"></canvas></div>
+    </div>
+  `;
+
+  card.querySelector(`#plug-name-${p.id}`).addEventListener('click', () => renamePlug(p.id));
+  return card;
+}
+
+function updatePlugCard(p) {
+  const cur  = p.current || {};
+  const cost = p.cost    || {};
+
+  const dot = document.getElementById(`plug-dot-${p.id}`);
+  if (dot) dot.classList.toggle('offline', !p.online);
+
+  setText(`plug-watts-${p.id}`,
+    cur.watts !== undefined
+      ? `${cur.watts}<span class="unit-label"> W</span>`
+      : '—<span class="unit-label"> W</span>',
+    /*html=*/true);
+
+  setText(`plug-status-${p.id}`, p.power_on ? 'Plug on' : 'Plug off');
+
+  const badge = document.getElementById(`plug-badge-${p.id}`);
+  if (badge) {
+    if (p.power_on) {
+      badge.textContent = 'On';
+      badge.className = 'mode-badge mode-auto';
+    } else {
+      badge.textContent = 'Off';
+      badge.className = 'mode-badge mode-off';
+    }
+  }
+
+  setText(`plug-session-cost-${p.id}`, fmt(cost.session_bgn));
+  setText(`plug-session-kwh-${p.id}`,  cost.session_kwh ? `${cost.session_kwh.toFixed(3)} kWh` : '');
+  setText(`plug-today-${p.id}`,  fmt(cost.today_bgn));
+  setText(`plug-today-kwh-${p.id}`, cost.today_kwh ? `${cost.today_kwh.toFixed(3)} kWh` : '');
+  setText(`plug-week-${p.id}`,   fmt(cost.week_bgn));
+  setText(`plug-month-${p.id}`,  fmt(cost.month_bgn));
+
+  updateChart(`plug-chart-${p.id}`, p.daily || []);
+}
+
 /* ---------- rename ---------- */
 
 async function renameEmitter(emitterId) {
@@ -569,6 +669,24 @@ async function renameEmitter(emitterId) {
 
   try {
     const res = await fetch(`${API}/emitters/${emitterId}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (!res.ok) throw new Error(res.status);
+    nameEl.textContent = newName;
+  } catch (_) {}
+}
+
+async function renamePlug(plugId) {
+  const nameEl = document.getElementById(`plug-name-${plugId}`);
+  if (!nameEl) return;
+  const current = nameEl.textContent;
+  const newName = prompt('Rename plug:', current);
+  if (!newName || newName === current) return;
+
+  try {
+    const res = await fetch(`${API}/plugs/${plugId}/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newName }),

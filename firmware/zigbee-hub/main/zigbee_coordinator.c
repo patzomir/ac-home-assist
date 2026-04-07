@@ -16,11 +16,11 @@ static ir_emitter_t s_emitters[MAX_EMITTERS];
 static uint8_t s_emitter_count = 0;
 static bool s_poll_active = false;
 
-#define PLUG_POLL_INTERVAL_MS 30000
+#define PLUG_POLL_INTERVAL_MS    30000
+#define PLUG_MAX_MISSED_POLLS    3     /* mark offline after this many unanswered polls */
 
 /* ---- forward declarations ----------------------------------------------- */
 
-static void configure_plug_reporting(uint16_t short_addr, uint8_t endpoint);
 static void poll_plugs(uint8_t param);
 static void bind_plug_cluster(uint16_t short_addr,
                                const esp_zb_ieee_addr_t plug_ieee,
@@ -117,9 +117,8 @@ static void on_simple_desc_resp(esp_zb_zdp_status_t status,
         e->online      = true;
 
         if (dtype == DEVICE_SMART_PLUG) {
-            /* Bind standard measurement clusters so the plug reports to the hub.
-               Reporting may be disabled on newer TS011F firmware; poll_plugs is
-               the primary mechanism, but bindings are cheap insurance. */
+            /* Bind standard measurement clusters so the plug knows its data
+               destination; polling is the primary data-fetch mechanism. */
             bind_plug_cluster(pj->short_addr, pj->ieee_addr, ep,
                               ELEC_MEAS_CLUSTER_ID);
             bind_plug_cluster(pj->short_addr, pj->ieee_addr, ep,
@@ -292,12 +291,9 @@ static void on_bind_resp(esp_zb_zdp_status_t status, void *user_ctx)
 {
     bind_ctx_t *ctx = (bind_ctx_t *)user_ctx;
     if (status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-        ESP_LOGI(TAG, "Bind OK for 0x%04x — configuring reporting", ctx->short_addr);
-        configure_plug_reporting(ctx->short_addr, ctx->endpoint);
+        ESP_LOGI(TAG, "Bind OK for 0x%04x", ctx->short_addr);
     } else {
-        ESP_LOGW(TAG, "Bind failed for 0x%04x (status=%d) — configuring reporting anyway",
-                 ctx->short_addr, status);
-        configure_plug_reporting(ctx->short_addr, ctx->endpoint);
+        ESP_LOGW(TAG, "Bind failed for 0x%04x (status=%d)", ctx->short_addr, status);
     }
     free(ctx);
 }
@@ -310,7 +306,6 @@ static void bind_plug_cluster(uint16_t short_addr,
     bind_ctx_t *ctx = malloc(sizeof(bind_ctx_t));
     if (!ctx) {
         ESP_LOGE(TAG, "OOM in bind_plug_cluster");
-        configure_plug_reporting(short_addr, endpoint);
         return;
     }
     ctx->short_addr = short_addr;
@@ -333,60 +328,6 @@ static void bind_plug_cluster(uint16_t short_addr,
     esp_zb_zdo_device_bind_req(&req, on_bind_resp, ctx);
 }
 
-/* ---- Attribute reporting configuration ---------------------------------- */
-
-static void configure_plug_reporting(uint16_t short_addr, uint8_t endpoint)
-{
-    /* haElectricalMeasurement (0x0B04) — activePower (0x050B, int16, 0.1 W) */
-    static int16_t power_change = 5;  /* report on ≥0.5 W change */
-    esp_zb_zcl_config_report_record_t power_record = {
-        .direction         = ESP_ZB_ZCL_REPORT_DIRECTION_SEND,
-        .attributeID       = ELEC_MEAS_ATTR_POWER_ID,
-        .attrType          = ESP_ZB_ZCL_ATTR_TYPE_S16,
-        .min_interval      = 10,
-        .max_interval      = 60,
-        .reportable_change = &power_change,
-    };
-    esp_zb_zcl_config_report_cmd_t power_cmd = {
-        .zcl_basic_cmd = {
-            .dst_addr_u.addr_short = short_addr,
-            .dst_endpoint          = endpoint,
-            .src_endpoint          = HUB_ENDPOINT,
-        },
-        .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-        .clusterID     = ELEC_MEAS_CLUSTER_ID,
-        .record_number = 1,
-        .record_field  = &power_record,
-    };
-    esp_zb_zcl_config_report_cmd_req(&power_cmd);
-
-    /* seMetering (0x0702) — currentSummDelivered (0x0000, uint48) */
-    static uint64_t energy_change = 1;
-    esp_zb_zcl_config_report_record_t energy_record = {
-        .direction         = ESP_ZB_ZCL_REPORT_DIRECTION_SEND,
-        .attributeID       = ZCL_METERING_ATTR_ENERGY_ID,
-        .attrType          = ESP_ZB_ZCL_ATTR_TYPE_U48,
-        .min_interval      = 30,
-        .max_interval      = 300,
-        .reportable_change = &energy_change,
-    };
-    esp_zb_zcl_config_report_cmd_t energy_cmd = {
-        .zcl_basic_cmd = {
-            .dst_addr_u.addr_short = short_addr,
-            .dst_endpoint          = endpoint,
-            .src_endpoint          = HUB_ENDPOINT,
-        },
-        .address_mode  = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-        .clusterID     = ZCL_METERING_CLUSTER_ID,
-        .record_number = 1,
-        .record_field  = &energy_record,
-    };
-    esp_zb_zcl_config_report_cmd_req(&energy_cmd);
-
-    ESP_LOGI(TAG, "Configured attribute reporting for plug 0x%04x ep=%d",
-             short_addr, endpoint);
-}
-
 /* ---- Standard ZCL attribute decoders ------------------------------------ */
 
 /* Decodes one haElectricalMeasurement (0x0B04) attribute.
@@ -403,22 +344,18 @@ static bool decode_elec_meas_attr(uint16_t attr_id, const void *value,
         int16_t raw = *(const int16_t *)value;
         m->has_power      = true;
         m->active_power_w = (int16_t)(raw / 10); /* 0.1 W → W */
-        ESP_LOGI(TAG, "Power 0x%04x: raw=%d → %d W", m->short_addr, raw, m->active_power_w);
         return true;
     }
     case ELEC_MEAS_ATTR_VOLTAGE_ID: {
         uint16_t raw = *(const uint16_t *)value;
         m->has_voltage = true;
         m->voltage_dv  = raw; /* raw already in 0.1 V */
-        ESP_LOGI(TAG, "Voltage 0x%04x: raw=%u → %u.%u V",
-                 m->short_addr, raw, raw / 10, raw % 10);
         return true;
     }
     case ELEC_MEAS_ATTR_CURRENT_ID: {
         uint16_t raw = *(const uint16_t *)value;
         m->has_current = true;
         m->current_ma  = raw; /* raw already in mA */
-        ESP_LOGI(TAG, "Current 0x%04x: raw=%u → %u mA", m->short_addr, raw, raw);
         return true;
     }
     default:
@@ -441,9 +378,6 @@ static bool decode_metering_attr(uint16_t attr_id, const void *value,
 
     m->has_energy = true;
     m->energy_wh  = raw * 10; /* raw/100=kWh → raw*10=Wh */
-    ESP_LOGI(TAG, "Energy 0x%04x: raw=%llu → %llu Wh",
-             m->short_addr, (unsigned long long)raw,
-             (unsigned long long)m->energy_wh);
     return true;
 }
 
@@ -464,6 +398,22 @@ static void poll_plugs(uint8_t param)
     for (int i = 0; i < s_emitter_count; i++) {
         ir_emitter_t *e = &s_emitters[i];
         if (e->device_type != DEVICE_SMART_PLUG) continue;
+
+        /* Fix 2: skip devices already known to be offline. */
+        if (!e->online) continue;
+
+        /* Fix 3: if the previous poll went unanswered, count it.
+           After PLUG_MAX_MISSED_POLLS consecutive misses, mark offline
+           so we stop queuing requests and burning ZBOSS buffers. */
+        if (e->missed_polls >= PLUG_MAX_MISSED_POLLS) {
+            ESP_LOGW(TAG, "0x%04x no response to %d consecutive polls — marking offline",
+                     e->short_addr, e->missed_polls);
+            e->online       = false;
+            e->missed_polls = 0;
+            if (s_cb.on_device_left) s_cb.on_device_left(e->short_addr);
+            continue;
+        }
+        e->missed_polls++;  /* reset to 0 in CMD_READ_ATTR_RESP_CB_ID on response */
 
         /* Poll haElectricalMeasurement for voltage, current, power */
         esp_zb_zcl_read_attr_cmd_t elec_cmd = {
@@ -546,12 +496,16 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
 
         uint16_t addr = msg->info.src_address.u.short_addr;
 
-        /* A poll response means the device is reachable — mark it online so the
-           scheduler can send it setpoints even if it never sent a device-announce. */
+        /* A poll response means the device is reachable — reset the miss counter
+           and mark online so the scheduler can send it setpoints even if it never
+           sent a device-announce. */
         ir_emitter_t *resp_e = find_emitter_by_addr(addr);
-        if (resp_e && !resp_e->online) {
-            ESP_LOGI(TAG, "0x%04x responded to poll — marking online", addr);
-            resp_e->online = true;
+        if (resp_e) {
+            resp_e->missed_polls = 0;
+            if (!resp_e->online) {
+                ESP_LOGI(TAG, "0x%04x responded to poll — marking online", addr);
+                resp_e->online = true;
+            }
         }
 
         for (const esp_zb_zcl_read_attr_resp_variable_t *v = msg->variables;

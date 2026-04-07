@@ -38,7 +38,7 @@ class SmartPlugAdmin(admin.ModelAdmin):
 
 @admin.register(SmartPlugEvent)
 class SmartPlugEventAdmin(admin.ModelAdmin):
-    list_display = ("plug", "ts", "power_on", "measured_watts")
+    list_display = ("plug", "ts", "power_on", "measured_watts", "energy_wh", "voltage_dv", "current_ma")
     list_filter = ("plug", "power_on")
     date_hierarchy = "ts"
 

@@ -421,10 +421,13 @@ def receive_plug_event(request):
     """
     Payload:
     {
-        "addr":    2,      // Zigbee short address (int)
-        "power":   true,   // plug on/off
-        "watts":   120,    // measured power (optional, 0 when off)
-        "ts":      1712345678  // unix timestamp (optional)
+        "addr":       2,          // Zigbee short address (int)
+        "power":      true,       // plug on/off
+        "watts":      120,        // measured power in W (optional, 0 when off)
+        "energy_wh":  "1500000",  // cumulative energy in Wh (optional, string)
+        "voltage_dv": 2300,       // voltage in 0.1V units (optional)
+        "current_ma": 500,        // current in milliamps (optional)
+        "ts":         1712345678  // unix timestamp (optional)
     }
     Hub identifier is sent in X-Hub-Id header.
     """
@@ -445,7 +448,10 @@ def receive_plug_event(request):
     )
 
     power_on       = bool(data.get("power", True))
-    measured_watts = int(data.get("watts", 0))
+    measured_watts = int(data.get("watts", 0)) if data.get("watts") is not None else None
+    energy_wh      = int(data["energy_wh"]) if data.get("energy_wh") is not None else None
+    voltage_dv     = int(data["voltage_dv"]) if data.get("voltage_dv") is not None else None
+    current_ma     = int(data["current_ma"]) if data.get("current_ma") is not None else None
 
     plug.online    = True
     plug.power_on  = power_on
@@ -457,15 +463,48 @@ def receive_plug_event(request):
         from datetime import datetime
         ts = datetime.utcfromtimestamp(int(data["ts"])).replace(tzinfo=timezone.utc)
 
-    SmartPlugEvent.objects.create(
-        plug=plug,
-        power_on=power_on,
-        measured_watts=measured_watts,
-        ts=ts,
-    )
+    # Merge partial readings from the same poll cycle into one row.
+    # The firmware sends each ZCL cluster response as a separate POST, so
+    # multiple requests arrive within seconds of each other. Coalesce them
+    # into the most recent event within the last 60 s instead of creating
+    # a new sparse row every time.
+    MERGE_WINDOW_S = 60
+    window_start = ts - timezone.timedelta(seconds=MERGE_WINDOW_S)
+    existing = (SmartPlugEvent.objects
+                .filter(plug=plug, ts__gte=window_start)
+                .order_by("-ts")
+                .first())
 
-    logger.info("Plug event from hub=%s addr=0x%04X power=%s %dW",
-                hub_id, short_addr, power_on, measured_watts)
+    if existing:
+        update_fields = []
+        if measured_watts is not None:
+            existing.measured_watts = measured_watts
+            update_fields.append("measured_watts")
+        if energy_wh is not None:
+            existing.energy_wh = energy_wh
+            update_fields.append("energy_wh")
+        if voltage_dv is not None:
+            existing.voltage_dv = voltage_dv
+            update_fields.append("voltage_dv")
+        if current_ma is not None:
+            existing.current_ma = current_ma
+            update_fields.append("current_ma")
+        if update_fields:
+            existing.save(update_fields=update_fields)
+        event = existing
+    else:
+        event = SmartPlugEvent.objects.create(
+            plug=plug,
+            power_on=power_on,
+            measured_watts=measured_watts or 0,
+            energy_wh=energy_wh,
+            voltage_dv=voltage_dv,
+            current_ma=current_ma,
+            ts=ts,
+        )
+
+    logger.info("Plug event from hub=%s addr=0x%04X power=%s %dW energy=%s Wh",
+                hub_id, short_addr, power_on, event.measured_watts, event.energy_wh)
 
     return Response({"ok": True}, status=status.HTTP_201_CREATED)
 

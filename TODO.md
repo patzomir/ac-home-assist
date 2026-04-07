@@ -26,8 +26,8 @@
 ## Hub Authentication (planned)
 
 ### Hub identity
-- [ ] Derive hub ID from Wi-Fi MAC address at boot (`esp_wifi_get_mac(WIFI_IF_STA, mac)`, format as `hub_AABBCCDDEEFF`)
-- [ ] Send `X-Hub-Id` header on all HTTP requests (`http_reporter.c`) — fixes current "unknown" hub issue
+- [x] Derive hub ID from Wi-Fi MAC address at boot (`esp_wifi_get_mac(WIFI_IF_STA, mac)`, format as `hub_AABBCCDDEEFF`)
+- [x] Send `X-Hub-Id` header on all HTTP requests (`http_reporter.c`) — fixes current "unknown" hub issue
 
 ### Claim-code provisioning flow
 1. User opens backend UI → clicks "Add Hub" → backend generates short-lived (15 min), single-use claim code

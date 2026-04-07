@@ -117,6 +117,9 @@ class SmartPlugEvent(models.Model):
                                         related_name="events")
     power_on        = models.BooleanField(default=True)
     measured_watts  = models.IntegerField(default=0)
+    energy_wh       = models.BigIntegerField(null=True, blank=True)  # cumulative Wh
+    voltage_dv      = models.IntegerField(null=True, blank=True)     # 0.1V units
+    current_ma      = models.IntegerField(null=True, blank=True)     # milliamps
     ts              = models.DateTimeField(default=timezone.now, db_index=True)
 
     class Meta:
