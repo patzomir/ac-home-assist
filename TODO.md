@@ -2,17 +2,18 @@
 
 ## Firmware
 
-- [ ] Implement MQTT command subscription (`hub/{hub_id}/commands`) — see `mqtt-hub.md`
-- [ ] Implement MQTT LWT for hub online/offline status
+- [x] Implement MQTT command subscription (`hub/{hub_id}/commands`) — `hub_mqtt.c`
+- [x] Implement MQTT LWT for hub online/offline status — `hub_mqtt.c`
 - [ ] Remove HTTP command polling (`GET /api/hubs/{hub_id}/commands/`) once MQTT is in place
 - [ ] Implement heartbeat (currently defined in backend but not called by firmware)
 - [ ] Evaluate dropping `esp_http_client` entirely (save ~15–25 KB flash) if all traffic moves to MQTT
 
 ## Backend
 
-- [ ] Add Mosquitto broker to deployment — see `mqtt-hub.md`
-- [ ] Add `paho-mqtt` publisher: fire to `hub/{hub_id}/commands` on `PendingCommand` creation
-- [ ] Subscribe to `hub/{hub_id}/status` to update hub online/offline in DB (replaces heartbeat endpoint)
+- [x] Add Mosquitto broker to deployment — `docker-compose.yml`
+- [x] Add `paho-mqtt` publisher: fire to `hub/{hub_id}/commands` on `PendingCommand` creation — `mqtt_manager.py`
+- [x] Subscribe to `hub/{hub_id}/status` to update hub online/offline in DB — `mqtt_manager.py`
+- [x] Add `MQTT_BROKER_HOST`, `MQTT_BROKER_PORT` to `settings.py`
 - [ ] Replace SQLite with PostgreSQL before multi-tenant rollout
 - [ ] Replace Django dev server with gunicorn
 - [ ] Wire up APScheduler (already in requirements) for background jobs
@@ -40,15 +41,15 @@
 - [ ] Add claim code field to SoftAP captive portal HTML (`wifi_manager.c:127-160`)
 - [ ] Save claim code to NVS alongside WiFi creds
 - [ ] After WiFi connects, call `POST /api/provision`; save returned MQTT credentials to NVS
-- [ ] New `mqtt_client.c`: connect to Mosquitto with NVS credentials; subscribe to `hub/{id}/commands`; LWT for heartbeat
+- [x] New `mqtt_client.c`: connect to Mosquitto with NVS credentials; subscribe to `hub/{id}/commands`; LWT for heartbeat — implemented as `hub_mqtt.c`
 
 ### Backend changes
 - [ ] New `HubClaimCode` model: `code`, `created_at`, `expires_at`, `used` (`models.py`)
 - [ ] Add `mqtt_password_hash` field to `Hub` model (`models.py`)
 - [ ] `POST /api/provision` endpoint: validate claim code → generate MQTT password → return credentials (`views.py`)
 - [ ] Claim code generation endpoint (called from backend UI when user clicks "Add Hub") (`views.py`)
-- [ ] Add `MQTT_BROKER_HOST`, `MQTT_BROKER_PORT` to `settings.py`
-- [ ] New `mqtt_manager.py`: paho-mqtt client; subscribe to `hub/+/status`; publish to `hub/{id}/commands`
+- [x] Add `MQTT_BROKER_HOST`, `MQTT_BROKER_PORT` to `settings.py`
+- [x] New `mqtt_manager.py`: paho-mqtt client; subscribe to `hub/+/status`; publish to `hub/{id}/commands`
 
 ### Mosquitto broker
 - [ ] Configure per-hub username/password (dynamic security plugin or managed password file)
