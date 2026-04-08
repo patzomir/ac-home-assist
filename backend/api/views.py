@@ -676,12 +676,16 @@ def scan_hub_network(request, hub_pk):
 # Smart plug name update
 # ---------------------------------------------------------------------------
 
-@api_view(["PATCH"])
+@api_view(["PATCH", "DELETE"])
 def update_plug(request, plug_id):
     try:
         plug = SmartPlug.objects.get(pk=plug_id)
     except SmartPlug.DoesNotExist:
         return Response({"error": "not found"}, status=404)
+
+    if request.method == "DELETE":
+        plug.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     if "name" in request.data:
         plug.name = request.data["name"][:128]

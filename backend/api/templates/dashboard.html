@@ -187,6 +187,10 @@
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-ghost   { background: transparent; color: var(--text2);
                  border: 1px solid var(--border); }
+  .btn-danger  { background: transparent; color: var(--red);
+                 border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+                 padding: 5px 10px; font-size: 12px; }
+  .btn-danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
   .save-status { font-size: 12px; color: var(--green); }
 
   /* --- Device type badge --- */
@@ -373,9 +377,12 @@ function render(data) {
   const unitsGrid = document.getElementById('units-grid');
   if (hasUnits) {
     unitsSection.style.display = '';
-    const existingIds = new Set([...unitsGrid.querySelectorAll('[data-unit-id]')].map(el => el.dataset.unitId));
+    const liveUnitIds = new Set(data.units.map(u => String(u.id)));
+    [...unitsGrid.querySelectorAll('[data-unit-id]')].forEach(el => {
+      if (!liveUnitIds.has(el.dataset.unitId)) el.remove();
+    });
     data.units.forEach(u => {
-      if (!existingIds.has(String(u.id))) unitsGrid.appendChild(buildCard(u));
+      if (!unitsGrid.querySelector(`[data-unit-id="${u.id}"]`)) unitsGrid.appendChild(buildCard(u));
     });
     data.units.forEach(u => updateCard(u));
   } else {
@@ -387,9 +394,12 @@ function render(data) {
   const plugsGrid = document.getElementById('plugs-grid');
   if (hasPlugs) {
     plugsSection.style.display = '';
-    const existingPlugIds = new Set([...plugsGrid.querySelectorAll('[data-plug-id]')].map(el => el.dataset.plugId));
+    const livePlugIds = new Set(data.plugs.map(p => String(p.id)));
+    [...plugsGrid.querySelectorAll('[data-plug-id]')].forEach(el => {
+      if (!livePlugIds.has(el.dataset.plugId)) el.remove();
+    });
     data.plugs.forEach(p => {
-      if (!existingPlugIds.has(String(p.id))) plugsGrid.appendChild(buildPlugCard(p));
+      if (!plugsGrid.querySelector(`[data-plug-id="${p.id}"]`)) plugsGrid.appendChild(buildPlugCard(p));
     });
     data.plugs.forEach(p => updatePlugCard(p));
   } else {
@@ -498,6 +508,7 @@ function buildCard(u) {
           title="Click to rename" style="cursor:pointer">${esc(u.name)}</h2>
       <span class="type-badge">IR Emitter</span>
       <span class="unit-addr">${esc(u.addr)}</span>
+      <button class="btn btn-danger" id="del-emitter-${u.id}" title="Remove this device">Remove</button>
     </div>
 
     <div class="current-row">
@@ -581,6 +592,9 @@ function buildCard(u) {
 
   /* inline rename on name click */
   card.querySelector(`#name-${u.id}`).addEventListener('click', () => renameEmitter(u.id));
+
+  /* delete button */
+  card.querySelector(`#del-emitter-${u.id}`).addEventListener('click', () => deleteEmitter(u.id, card));
 
   /* load existing schedule */
   loadSchedule(u.id);
@@ -766,6 +780,7 @@ function buildPlugCard(p) {
           title="Click to rename" style="cursor:pointer">${esc(p.name)}</h2>
       <span class="type-badge">Smart Plug</span>
       <span class="unit-addr">${esc(p.addr)}</span>
+      <button class="btn btn-danger" id="del-plug-${p.id}" title="Remove this device">Remove</button>
     </div>
 
     <div class="current-row">
@@ -806,6 +821,7 @@ function buildPlugCard(p) {
   `;
 
   card.querySelector(`#plug-name-${p.id}`).addEventListener('click', () => renamePlug(p.id));
+  card.querySelector(`#del-plug-${p.id}`).addEventListener('click', () => deletePlug(p.id, card));
   return card;
 }
 
@@ -916,6 +932,36 @@ async function renamePlug(plugId) {
     if (!res.ok) throw new Error(res.status);
     nameEl.textContent = newName;
   } catch (_) {}
+}
+
+/* ---------- delete ---------- */
+
+async function deleteEmitter(emitterId, cardEl) {
+  if (!confirm('Remove this IR emitter from the dashboard? This will also clear its schedule on the hub.')) return;
+  try {
+    const res = await fetch(`${API}/emitters/${emitterId}/`, {
+      method: 'DELETE',
+      headers: { 'X-CSRFToken': getCsrfToken() },
+    });
+    if (!res.ok) throw new Error(res.status);
+    cardEl.remove();
+  } catch (e) {
+    alert(`Failed to remove device (${e.message})`);
+  }
+}
+
+async function deletePlug(plugId, cardEl) {
+  if (!confirm('Remove this smart plug from the dashboard?')) return;
+  try {
+    const res = await fetch(`${API}/plugs/${plugId}/`, {
+      method: 'DELETE',
+      headers: { 'X-CSRFToken': getCsrfToken() },
+    });
+    if (!res.ok) throw new Error(res.status);
+    cardEl.remove();
+  } catch (e) {
+    alert(`Failed to remove device (${e.message})`);
+  }
 }
 
 /* ---------- helpers ---------- */
