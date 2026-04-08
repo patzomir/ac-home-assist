@@ -1,3 +1,4 @@
+import calendar
 import logging
 from datetime import timedelta
 
@@ -6,10 +7,10 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Hub, IREmitter, ACEvent, Schedule, PendingCommand, SmartPlug, SmartPlugEvent
-from .energy_model import estimate_watts, compute_interval_cost
-from .weather import get_outdoor_temp
 from . import mqtt_manager
+from .energy_model import compute_interval_cost, estimate_watts
+from .models import ACEvent, Hub, IREmitter, PendingCommand, Schedule, SmartPlug, SmartPlugEvent
+from .weather import get_outdoor_temp
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,34 @@ def _plug_daily_breakdown(plug: SmartPlug, days=7):
     return result
 
 
+def _billing_cycle_bounds(now, cycle_start_day):
+    """
+    Return (cycle_start_dt, cycle_end_dt, total_days, days_elapsed) for the
+    current billing cycle whose start day-of-month is *cycle_start_day* (1-28).
+    """
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day = cycle_start_day
+
+    if today.day >= day:
+        cycle_start = today.replace(day=day)
+        # Next occurrence: same day-of-month next calendar month.
+        if today.month == 12:
+            cycle_end = cycle_start.replace(year=today.year + 1, month=1)
+        else:
+            cycle_end = cycle_start.replace(month=today.month + 1)
+    else:
+        # Cycle started last month — clamp to last day of that month.
+        first_of_this = today.replace(day=1)
+        last_of_prev = first_of_this - timedelta(days=1)
+        actual_day = min(day, calendar.monthrange(last_of_prev.year, last_of_prev.month)[1])
+        cycle_start = last_of_prev.replace(day=actual_day)
+        cycle_end = today.replace(day=day)
+
+    total_days = (cycle_end - cycle_start).days
+    days_elapsed = (now - cycle_start).total_seconds() / 86400
+    return cycle_start, cycle_end, total_days, days_elapsed
+
+
 @api_view(["GET"])
 def dashboard_data(request):
     """
@@ -191,6 +220,11 @@ def dashboard_data(request):
     """
     now = timezone.now()
     hubs = Hub.objects.prefetch_related("emitters").all()
+
+    cycle_start_day = max(1, min(28, int(request.query_params.get("cycle_start", 1))))
+    cycle_start_dt, cycle_end_dt, cycle_total_days, cycle_days_elapsed = (
+        _billing_cycle_bounds(now, cycle_start_day)
+    )
 
     units = []
     for hub in hubs:
@@ -208,6 +242,13 @@ def dashboard_data(request):
             cost_today  = _cost_for_period(emitter, today_start)
             cost_week   = _cost_for_period(emitter, week_start)
             cost_month  = _cost_for_period(emitter, month_start)
+
+            # Billing cycle cost + projection
+            cost_cycle = _cost_for_period(emitter, cycle_start_dt)
+            cycle_projected = (
+                round(cost_cycle["cost_bgn"] / cycle_days_elapsed * cycle_total_days, 4)
+                if cycle_days_elapsed >= 0.5 else None
+            )
 
             # Session cost (since last ON event)
             last_on = (
@@ -234,12 +275,14 @@ def dashboard_data(request):
                     "outdoor_c":   last_event.outdoor_temp_c if last_event else None,
                 } if last_event else {},
                 "cost": {
-                    "session_bgn": cost_session["cost_bgn"],
-                    "session_kwh": cost_session["kwh"],
-                    "today_bgn":   cost_today["cost_bgn"],
-                    "today_kwh":   cost_today["kwh"],
-                    "week_bgn":    cost_week["cost_bgn"],
-                    "month_bgn":   cost_month["cost_bgn"],
+                    "session_bgn":       cost_session["cost_bgn"],
+                    "session_kwh":       cost_session["kwh"],
+                    "today_bgn":         cost_today["cost_bgn"],
+                    "today_kwh":         cost_today["kwh"],
+                    "week_bgn":          cost_week["cost_bgn"],
+                    "month_bgn":         cost_month["cost_bgn"],
+                    "cycle_bgn":         cost_cycle["cost_bgn"],
+                    "cycle_projected_bgn": cycle_projected,
                 },
                 "daily": _daily_breakdown(emitter, days=7),
             })
@@ -269,6 +312,12 @@ def dashboard_data(request):
             cost_week   = _plug_cost_for_period(plug, week_start)
             cost_month  = _plug_cost_for_period(plug, month_start)
 
+            cost_cycle = _plug_cost_for_period(plug, cycle_start_dt)
+            cycle_projected = (
+                round(cost_cycle["cost_bgn"] / cycle_days_elapsed * cycle_total_days, 4)
+                if cycle_days_elapsed >= 0.5 else None
+            )
+
             last_on = (
                 SmartPlugEvent.objects.filter(plug=plug, power_on=True)
                 .order_by("-ts").first()
@@ -297,12 +346,14 @@ def dashboard_data(request):
                     "watts": last_event.measured_watts if last_event else 0,
                 },
                 "cost": {
-                    "session_bgn": cost_session["cost_bgn"],
-                    "session_kwh": cost_session["kwh"],
-                    "today_bgn":   cost_today["cost_bgn"],
-                    "today_kwh":   cost_today["kwh"],
-                    "week_bgn":    cost_week["cost_bgn"],
-                    "month_bgn":   cost_month["cost_bgn"],
+                    "session_bgn":         cost_session["cost_bgn"],
+                    "session_kwh":         cost_session["kwh"],
+                    "today_bgn":           cost_today["cost_bgn"],
+                    "today_kwh":           cost_today["kwh"],
+                    "week_bgn":            cost_week["cost_bgn"],
+                    "month_bgn":           cost_month["cost_bgn"],
+                    "cycle_bgn":           cost_cycle["cost_bgn"],
+                    "cycle_projected_bgn": cycle_projected,
                 },
                 "daily": _plug_daily_breakdown(plug, days=7),
             })
@@ -337,6 +388,13 @@ def dashboard_data(request):
         "units": units,
         "plugs": plugs,
         "server_time": now.isoformat(),
+        "cycle": {
+            "start_day":     cycle_start_day,
+            "start_date":    cycle_start_dt.date().isoformat(),
+            "end_date":      cycle_end_dt.date().isoformat(),
+            "total_days":    cycle_total_days,
+            "days_elapsed":  round(cycle_days_elapsed, 1),
+        },
     })
 
 

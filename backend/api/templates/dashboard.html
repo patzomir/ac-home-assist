@@ -125,7 +125,7 @@
 
   /* --- Cost grid --- */
   .cost-row {
-    display: grid; grid-template-columns: repeat(3, 1fr);
+    display: grid; grid-template-columns: repeat(4, 1fr);
     gap: 1px; background: var(--border);
     border-top: 1px solid var(--border);
   }
@@ -248,6 +248,65 @@
     color: var(--red); margin-left: 6px; vertical-align: middle;
   }
 
+  /* --- Projection panel --- */
+  .projection-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+  }
+  .projection-header {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .8px;
+    margin-bottom: 14px;
+  }
+  .projection-header .cycle-range {
+    font-size: 12px; color: var(--text2);
+    text-transform: none; letter-spacing: 0; font-weight: 500;
+  }
+  .cycle-start-control {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; text-transform: none; letter-spacing: 0;
+    color: var(--text2);
+  }
+  .cycle-start-control label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .cycle-start-control input {
+    width: 52px; background: var(--card);
+    border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 4px 8px; font-size: 13px;
+  }
+  .cycle-start-control input:focus { outline: none; border-color: var(--accent); }
+  .projection-totals {
+    display: flex; flex-wrap: wrap; gap: 12px;
+  }
+  .proj-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 18px;
+    flex: 1; min-width: 140px;
+  }
+  .proj-card .proj-label {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .proj-card .proj-amount {
+    font-size: 26px; font-weight: 700;
+    font-variant-numeric: tabular-nums; margin-top: 4px;
+  }
+  .proj-card .proj-amount.spent  { color: var(--text); }
+  .proj-card .proj-amount.projected { color: var(--heat); }
+  .proj-card .proj-sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+  .proj-progress-bar {
+    height: 4px; background: var(--border); border-radius: 2px;
+    margin-top: 10px; overflow: hidden;
+  }
+  .proj-progress-fill {
+    height: 100%; background: var(--accent); border-radius: 2px;
+    transition: width .4s ease;
+  }
+
   /* --- Section headers --- */
   .devices-section { margin-bottom: 28px; }
 
@@ -282,6 +341,19 @@
     <span class="refresh-indicator" id="refresh-label">Refreshing…</span>
   </div>
 
+  <!-- Projection panel -->
+  <div class="projection-panel" id="projection-panel" style="display:none">
+    <div class="projection-header">
+      Billing cycle projection
+      <span class="cycle-range" id="proj-cycle-range"></span>
+      <div class="cycle-start-control">
+        <label for="cycle-start-input">Cycle starts on day</label>
+        <input type="number" id="cycle-start-input" min="1" max="28" value="1">
+      </div>
+    </div>
+    <div class="projection-totals" id="projection-totals"></div>
+  </div>
+
   <!-- Hub status row -->
   <div id="hubs-section" style="display:none">
     <p class="section-label">Hubs</p>
@@ -314,12 +386,29 @@ const REFRESH_MS = 30_000;
 const charts = {};       // canvas_id → Chart instance
 const saveStatus = {};   // emitter_id → timeout
 
+/* ---------- billing cycle start day (persisted) ---------- */
+
+let cycleStartDay = parseInt(localStorage.getItem('cycleStartDay') || '1', 10);
+
+function initCycleStartInput() {
+  const input = document.getElementById('cycle-start-input');
+  if (!input) return;
+  input.value = cycleStartDay;
+  input.addEventListener('change', () => {
+    const v = Math.max(1, Math.min(28, parseInt(input.value, 10) || 1));
+    input.value = v;
+    cycleStartDay = v;
+    localStorage.setItem('cycleStartDay', v);
+    fetchAndRender();
+  });
+}
+
 /* ---------- fetch + render loop ---------- */
 
 async function fetchAndRender() {
   setRefreshLabel('Refreshing…');
   try {
-    const res = await fetch(`${API}/dashboard/`);
+    const res = await fetch(`${API}/dashboard/?cycle_start=${cycleStartDay}`);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     render(data);
@@ -357,6 +446,11 @@ function render(data) {
     return;
   }
   emptyState.style.display = 'none';
+
+  /* projection panel */
+  if ((hasUnits || hasPlugs) && data.cycle) {
+    renderProjectionPanel(data);
+  }
 
   /* hubs */
   const hubsSection = document.getElementById('hubs-section');
@@ -405,6 +499,55 @@ function render(data) {
   } else {
     plugsSection.style.display = 'none';
   }
+}
+
+/* ---------- projection panel ---------- */
+
+function renderProjectionPanel(data) {
+  const panel = document.getElementById('projection-panel');
+  if (!panel) return;
+  panel.style.display = '';
+
+  const cycle = data.cycle;
+  const pct = Math.min(100, Math.round((cycle.days_elapsed / cycle.total_days) * 100));
+
+  // Cycle date range label
+  const rangeEl = document.getElementById('proj-cycle-range');
+  if (rangeEl) {
+    rangeEl.textContent =
+      `${fmtDate(cycle.start_date)} – ${fmtDate(cycle.end_date)}` +
+      `  ·  day ${Math.floor(cycle.days_elapsed)} of ${cycle.total_days}`;
+  }
+
+  // Sum totals across all devices
+  const allDevices = [...(data.units || []), ...(data.plugs || [])];
+  let totalSpent = 0, totalProjected = 0, hasProjection = false;
+  allDevices.forEach(d => {
+    const c = d.cost || {};
+    totalSpent += c.cycle_bgn || 0;
+    if (c.cycle_projected_bgn != null) { totalProjected += c.cycle_projected_bgn; hasProjection = true; }
+  });
+
+  const totalsEl = document.getElementById('projection-totals');
+  if (!totalsEl) return;
+  totalsEl.innerHTML = `
+    <div class="proj-card">
+      <div class="proj-label">Spent this cycle</div>
+      <div class="proj-amount spent">${totalSpent.toFixed(2)} <span style="font-size:14px;font-weight:400;color:var(--text2)">BGN</span></div>
+      <div class="proj-sub">${cycle.days_elapsed.toFixed(1)} of ${cycle.total_days} days</div>
+      <div class="proj-progress-bar"><div class="proj-progress-fill" style="width:${pct}%"></div></div>
+    </div>
+    <div class="proj-card">
+      <div class="proj-label">Projected full cycle</div>
+      <div class="proj-amount projected">${hasProjection ? totalProjected.toFixed(2) : '—'} <span style="font-size:14px;font-weight:400;color:var(--text2)">${hasProjection ? 'BGN' : ''}</span></div>
+      <div class="proj-sub">${hasProjection ? `at current rate · ${cycle.total_days}-day cycle` : 'Not enough data yet'}</div>
+    </div>
+  `;
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso + 'T00:00:00');
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
 /* ---------- hub cards ---------- */
@@ -540,6 +683,11 @@ function buildCard(u) {
         <div class="amount" id="month-${u.id}">—</div>
         <div class="label">BGN this month</div>
       </div>
+      <div class="cost-cell">
+        <div class="amount" id="proj-${u.id}">—</div>
+        <div class="label">BGN projected</div>
+        <div class="sub" id="proj-cycle-${u.id}"></div>
+      </div>
     </div>
 
     <div class="chart-section">
@@ -639,6 +787,15 @@ function updateCard(u) {
   setText(`today-kwh-${u.id}`, cost.today_kwh ? `${cost.today_kwh.toFixed(3)} kWh` : '');
   setText(`week-${u.id}`,   fmt(cost.week_bgn));
   setText(`month-${u.id}`,  fmt(cost.month_bgn));
+
+  /* projected */
+  const projEl = document.getElementById(`proj-${u.id}`);
+  if (projEl) {
+    const hasProj = cost.cycle_projected_bgn != null;
+    projEl.textContent = hasProj ? cost.cycle_projected_bgn.toFixed(2) : '—';
+    projEl.style.color = hasProj ? 'var(--heat)' : '';
+  }
+  setText(`proj-cycle-${u.id}`, cost.cycle_bgn != null ? `${cost.cycle_bgn.toFixed(4)} so far` : '');
 
   /* chart */
   updateChart(`chart-${u.id}`, u.daily || []);
@@ -812,6 +969,11 @@ function buildPlugCard(p) {
         <div class="amount" id="plug-month-${p.id}">—</div>
         <div class="label">BGN this month</div>
       </div>
+      <div class="cost-cell">
+        <div class="amount" id="plug-proj-${p.id}">—</div>
+        <div class="label">BGN projected</div>
+        <div class="sub" id="plug-proj-cycle-${p.id}"></div>
+      </div>
     </div>
 
     <div class="chart-section">
@@ -874,6 +1036,15 @@ function updatePlugCard(p) {
   setText(`plug-today-kwh-${p.id}`, cost.today_kwh ? `${cost.today_kwh.toFixed(3)} kWh` : '');
   setText(`plug-week-${p.id}`,   fmt(cost.week_bgn));
   setText(`plug-month-${p.id}`,  fmt(cost.month_bgn));
+
+  /* projected */
+  const plugProjEl = document.getElementById(`plug-proj-${p.id}`);
+  if (plugProjEl) {
+    const hasProj = cost.cycle_projected_bgn != null;
+    plugProjEl.textContent = hasProj ? cost.cycle_projected_bgn.toFixed(2) : '—';
+    plugProjEl.style.color = hasProj ? 'var(--heat)' : '';
+  }
+  setText(`plug-proj-cycle-${p.id}`, cost.cycle_bgn != null ? `${cost.cycle_bgn.toFixed(4)} so far` : '');
 
   updateChart(`plug-chart-${p.id}`, p.daily || []);
 }
@@ -1000,6 +1171,7 @@ function getCsrfToken() {
 
 /* ---------- boot ---------- */
 
+initCycleStartInput();
 fetchAndRender();
 setInterval(fetchAndRender, REFRESH_MS);
 </script>
