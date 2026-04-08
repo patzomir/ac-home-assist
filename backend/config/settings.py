@@ -84,3 +84,9 @@ DEFAULT_LONGITUDE = float(os.environ.get("LONGITUDE", "23.3219"))
 
 # BGN per kWh — Bulgarian residential peak tariff (Electrohold, 2024)
 ELECTRICITY_RATE_BGN = float(os.environ.get("ELECTRICITY_RATE_BGN", "0.2529"))
+
+# Time-of-use tariff (Bulgarian EVN/Electrohold two-zone schedule)
+ELECTRICITY_RATE_DAY_BGN   = float(os.environ.get("ELECTRICITY_RATE_DAY_BGN",   "0.28"))
+ELECTRICITY_RATE_NIGHT_BGN = float(os.environ.get("ELECTRICITY_RATE_NIGHT_BGN", "0.18"))
+NIGHT_START_HOUR = int(os.environ.get("NIGHT_START_HOUR", "22"))  # 22:00 local
+NIGHT_END_HOUR   = int(os.environ.get("NIGHT_END_HOUR",   "6"))   # 06:00 local

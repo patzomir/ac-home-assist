@@ -14,7 +14,10 @@ Model:
 Clamped to [50, 3000] W to avoid nonsense values at extreme outdoor temps.
 """
 
+from datetime import timedelta
+
 from django.conf import settings
+from django.utils import timezone as tz
 
 _W_PER_DELTA_HEAT = 25.0
 _W_PER_DELTA_COOL = 30.0
@@ -45,6 +48,121 @@ def kwh_from_watt_seconds(watts: int, seconds: float) -> float:
 
 def cost_bgn(kwh: float) -> float:
     return round(kwh * settings.ELECTRICITY_RATE_BGN, 4)
+
+
+def is_night_hour(hour: int) -> bool:
+    """Return True if the given local hour falls in the cheaper night zone."""
+    start = settings.NIGHT_START_HOUR  # e.g. 22
+    end   = settings.NIGHT_END_HOUR    # e.g. 6
+    if start > end:              # wraps midnight (the normal case)
+        return hour >= start or hour < end
+    return start <= hour < end   # unusual same-day window
+
+
+def _next_boundary(t_local):
+    """Return the next day/night tariff boundary at or after t_local."""
+    boundaries = sorted({settings.NIGHT_START_HOUR, settings.NIGHT_END_HOUR})
+    for b in boundaries:
+        if b > t_local.hour:
+            return t_local.replace(hour=b, minute=0, second=0, microsecond=0)
+    # All boundaries are earlier today — wrap to first boundary tomorrow.
+    return (t_local + timedelta(days=1)).replace(
+        hour=boundaries[0], minute=0, second=0, microsecond=0
+    )
+
+
+def split_interval_by_period(t_start, t_end, watts: int) -> dict:
+    """
+    Split a constant-power interval [t_start, t_end) across day/night tariff
+    zones.  Handles arbitrary lengths (multi-day spans fine).
+
+    Returns:
+        {
+          "kwh":            float,
+          "kwh_day":        float,
+          "kwh_night":      float,
+          "cost_bgn":       float,
+          "cost_day_bgn":   float,
+          "cost_night_bgn": float,
+        }
+    """
+    zeros = {"kwh": 0.0, "kwh_day": 0.0, "kwh_night": 0.0,
+             "cost_bgn": 0.0, "cost_day_bgn": 0.0, "cost_night_bgn": 0.0}
+    if t_start >= t_end:
+        return zeros
+
+    kwh_day = 0.0
+    kwh_night = 0.0
+
+    # Work in local time so tariff hours are respected for the user's timezone.
+    cursor = tz.localtime(t_start)
+    t_end_local = tz.localtime(t_end)
+
+    while cursor < t_end_local:
+        boundary = _next_boundary(cursor)
+        slice_end = min(boundary, t_end_local)
+        duration_s = (slice_end - cursor).total_seconds()
+        kwh_slice = watts * duration_s / 3_600_000.0
+        if is_night_hour(cursor.hour):
+            kwh_night += kwh_slice
+        else:
+            kwh_day += kwh_slice
+        cursor = slice_end
+
+    total_kwh   = kwh_day + kwh_night
+    cost_day    = round(kwh_day   * settings.ELECTRICITY_RATE_DAY_BGN,   4)
+    cost_night  = round(kwh_night * settings.ELECTRICITY_RATE_NIGHT_BGN, 4)
+    return {
+        "kwh":            round(total_kwh, 4),
+        "kwh_day":        round(kwh_day,   4),
+        "kwh_night":      round(kwh_night, 4),
+        "cost_bgn":       round(cost_day + cost_night, 4),
+        "cost_day_bgn":   cost_day,
+        "cost_night_bgn": cost_night,
+    }
+
+
+def compute_interval_cost_tou(events) -> dict:
+    """
+    Like compute_interval_cost() but returns ToU-split figures using
+    split_interval_by_period() for each consecutive event pair.
+
+    Returns:
+        {
+          "kwh": float, "kwh_day": float, "kwh_night": float,
+          "cost_bgn": float, "cost_day_bgn": float, "cost_night_bgn": float,
+          "avg_watts": float,
+        }
+    """
+    events = list(events)
+    totals = {"kwh": 0.0, "kwh_day": 0.0, "kwh_night": 0.0,
+              "cost_bgn": 0.0, "cost_day_bgn": 0.0, "cost_night_bgn": 0.0}
+    total_seconds = 0.0
+
+    for i in range(len(events) - 1):
+        e_now  = events[i]
+        e_next = events[i + 1]
+        duration_s = (e_next.ts - e_now.ts).total_seconds()
+        if duration_s <= 0:
+            continue
+        split = split_interval_by_period(e_now.ts, e_next.ts, e_now.estimated_watts)
+        for k in totals:
+            totals[k] += split[k]
+        total_seconds += duration_s
+
+    avg_watts = (
+        (totals["kwh"] * 3_600_000.0 / total_seconds)
+        if total_seconds > 0 else 0.0
+    )
+    return {
+        "kwh":            round(totals["kwh"],            4),
+        "kwh_day":        round(totals["kwh_day"],        4),
+        "kwh_night":      round(totals["kwh_night"],      4),
+        "cost_bgn":       round(totals["cost_bgn"],       4),
+        "cost_day_bgn":   round(totals["cost_day_bgn"],   4),
+        "cost_night_bgn": round(totals["cost_night_bgn"], 4),
+        "avg_watts":      round(avg_watts, 1),
+    }
 
 
 def compute_interval_cost(events) -> dict:

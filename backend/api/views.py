@@ -8,7 +8,15 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import mqtt_manager
-from .energy_model import compute_interval_cost, estimate_watts
+from django.conf import settings as django_settings
+
+from .energy_model import (
+    compute_interval_cost,
+    compute_interval_cost_tou,
+    estimate_watts,
+    is_night_hour,
+    split_interval_by_period,
+)
 from .models import ACEvent, Hub, IREmitter, PendingCommand, Schedule, SmartPlug, SmartPlugEvent
 from .weather import get_outdoor_temp
 
@@ -184,6 +192,235 @@ def _plug_daily_breakdown(plug: SmartPlug, days=7):
     return result
 
 
+def _cost_for_period_tou(emitter: IREmitter, since, until=None):
+    until = until or timezone.now()
+    events = list(
+        ACEvent.objects
+        .filter(emitter=emitter, ts__gte=since, ts__lte=until)
+        .order_by("ts")
+    )
+    if events:
+        last = events[-1]
+        events.append(ACEvent(emitter=emitter, estimated_watts=last.estimated_watts, ts=until))
+    return compute_interval_cost_tou(events)
+
+
+def _plug_cost_for_period_tou(plug: SmartPlug, since, until=None):
+    until = until or timezone.now()
+    events = list(
+        SmartPlugEvent.objects
+        .filter(plug=plug, ts__gte=since, ts__lte=until)
+        .order_by("ts")
+    )
+    if events:
+        last = events[-1]
+        events.append(SmartPlugEvent(plug=plug, measured_watts=last.measured_watts, ts=until))
+    for e in events:
+        e.estimated_watts = e.measured_watts
+    return compute_interval_cost_tou(events)
+
+
+def _daily_breakdown_tou(emitter: IREmitter, days=7):
+    """Return list of {date, kwh, cost_bgn, day_kwh, day_cost_bgn, night_kwh, night_cost_bgn}."""
+    result = []
+    now = timezone.now()
+    for d in range(days - 1, -1, -1):
+        day_start = (now - timedelta(days=d)).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        cost = _cost_for_period_tou(emitter, day_start, day_end)
+        result.append({
+            "date":           day_start.strftime("%a %d/%m"),
+            "kwh":            cost["kwh"],
+            "cost_bgn":       cost["cost_bgn"],
+            "day_kwh":        cost["kwh_day"],
+            "day_cost_bgn":   cost["cost_day_bgn"],
+            "night_kwh":      cost["kwh_night"],
+            "night_cost_bgn": cost["cost_night_bgn"],
+        })
+    return result
+
+
+def _plug_daily_breakdown_tou(plug: SmartPlug, days=7):
+    result = []
+    now = timezone.now()
+    for d in range(days - 1, -1, -1):
+        day_start = (now - timedelta(days=d)).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        cost = _plug_cost_for_period_tou(plug, day_start, day_end)
+        result.append({
+            "date":           day_start.strftime("%a %d/%m"),
+            "kwh":            cost["kwh"],
+            "cost_bgn":       cost["cost_bgn"],
+            "day_kwh":        cost["kwh_day"],
+            "day_cost_bgn":   cost["cost_day_bgn"],
+            "night_kwh":      cost["kwh_night"],
+            "night_cost_bgn": cost["cost_night_bgn"],
+        })
+    return result
+
+
+def _hourly_breakdown_ac(emitter: IREmitter, hours=24):
+    """Return list of {hour, kwh, cost_bgn, period, partial} for past N hours."""
+    result = []
+    now = timezone.now()
+    # Floor to current hour start
+    current_hour_start = now.replace(minute=0, second=0, microsecond=0)
+
+    for h in range(hours - 1, -1, -1):
+        slot_start = current_hour_start - timedelta(hours=h)
+        slot_end   = slot_start + timedelta(hours=1)
+        is_partial = (h == 0)
+        if is_partial:
+            slot_end = now
+
+        # Fetch events spanning this slot (include last event before slot for leading power state)
+        events = list(
+            ACEvent.objects
+            .filter(emitter=emitter, ts__lt=slot_end)
+            .order_by("ts")
+        )
+        # Only keep events within and the one immediately before the slot
+        slot_events = [e for e in events if e.ts >= slot_start]
+        leading = next((e for e in reversed(events) if e.ts < slot_start), None)
+        if leading:
+            # Clone with ts = slot_start so the interval starts from there
+            stub = ACEvent(emitter=emitter, estimated_watts=leading.estimated_watts, ts=slot_start)
+            slot_events = [stub] + slot_events
+        if slot_events:
+            slot_events.append(ACEvent(
+                emitter=emitter,
+                estimated_watts=slot_events[-1].estimated_watts,
+                ts=slot_end,
+            ))
+
+        cost = compute_interval_cost_tou(slot_events)
+        local_slot = timezone.localtime(slot_start)
+        result.append({
+            "hour":     local_slot.strftime("%H:00"),
+            "kwh":      cost["kwh"],
+            "cost_bgn": cost["cost_bgn"],
+            "period":   "night" if is_night_hour(local_slot.hour) else "day",
+            "partial":  is_partial,
+        })
+    return result
+
+
+def _hourly_breakdown_plug(plug: SmartPlug, hours=24):
+    result = []
+    now = timezone.now()
+    current_hour_start = now.replace(minute=0, second=0, microsecond=0)
+
+    for h in range(hours - 1, -1, -1):
+        slot_start = current_hour_start - timedelta(hours=h)
+        slot_end   = slot_start + timedelta(hours=1)
+        is_partial = (h == 0)
+        if is_partial:
+            slot_end = now
+
+        events = list(
+            SmartPlugEvent.objects
+            .filter(plug=plug, ts__lt=slot_end)
+            .order_by("ts")
+        )
+        slot_events = [e for e in events if e.ts >= slot_start]
+        leading = next((e for e in reversed(events) if e.ts < slot_start), None)
+        if leading:
+            stub = SmartPlugEvent(plug=plug, measured_watts=leading.measured_watts, ts=slot_start)
+            slot_events = [stub] + slot_events
+        if slot_events:
+            slot_events.append(SmartPlugEvent(
+                plug=plug,
+                measured_watts=slot_events[-1].measured_watts,
+                ts=slot_end,
+            ))
+        for e in slot_events:
+            e.estimated_watts = e.measured_watts
+
+        cost = compute_interval_cost_tou(slot_events)
+        local_slot = timezone.localtime(slot_start)
+        result.append({
+            "hour":     local_slot.strftime("%H:00"),
+            "kwh":      cost["kwh"],
+            "cost_bgn": cost["cost_bgn"],
+            "period":   "night" if is_night_hour(local_slot.hour) else "day",
+            "partial":  is_partial,
+        })
+    return result
+
+
+def _recommendations(devices_summary: list) -> list:
+    """
+    Rule-based recommendations.  devices_summary is a list of dicts:
+      {name, type, kwh_day, kwh_night, has_schedule, preheat_starts_in_day}
+    Returns up to 5 items sorted by potential_saving_bgn descending.
+    """
+    rate_day   = django_settings.ELECTRICITY_RATE_DAY_BGN
+    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_BGN
+    savings_diff = rate_day - rate_night
+    night_end = django_settings.NIGHT_END_HOUR
+
+    recs = []
+
+    total_day_kwh   = sum(d["kwh_day"]   for d in devices_summary)
+    total_night_kwh = sum(d["kwh_night"] for d in devices_summary)
+    total_kwh = total_day_kwh + total_night_kwh
+
+    for d in devices_summary:
+        device_total = d["kwh_day"] + d["kwh_night"]
+        if device_total == 0:
+            continue
+
+        # Rule 1 / 3: shift peak usage to night
+        if d["kwh_day"] / device_total > 0.3:
+            monthly_shiftable_kwh = d["kwh_day"] * (30 / 7)
+            saving = round(monthly_shiftable_kwh * savings_diff, 2)
+            if saving >= 0.50:
+                pct = int(d["kwh_day"] / device_total * 100)
+                recs.append({
+                    "type": "shift_ac" if d["type"] == "ac" else "shift_plug",
+                    "message": (
+                        f"{pct}% of {d['name']} usage is during peak hours — "
+                        f"shifting to night could save {saving:.2f} BGN/month"
+                    ),
+                    "potential_saving_bgn": saving,
+                    "device_name": d["name"],
+                })
+
+        # Rule 2: preheat tip (AC only)
+        if d["type"] == "ac" and d.get("preheat_starts_in_day"):
+            # Estimate saving: preheat_minutes * avg_watts / 1000 / 60 * savings_diff * 30
+            preheat_kwh = d.get("preheat_kwh_per_day", 0)
+            saving = round(preheat_kwh * 30 * savings_diff, 2)
+            if saving >= 0.50:
+                recs.append({
+                    "type": "preheat_tip",
+                    "message": (
+                        f"Schedule preheat for {d['name']} to start before "
+                        f"{night_end:02d}:00 to use cheaper night electricity"
+                    ),
+                    "potential_saving_bgn": saving,
+                    "device_name": d["name"],
+                })
+
+    # Rule 4: global tip
+    if total_kwh > 0 and total_night_kwh / total_kwh < 0.2:
+        monthly_total_kwh = total_kwh * (30 / 7)
+        saving = round(monthly_total_kwh * total_day_kwh / total_kwh * savings_diff, 2)
+        if saving >= 0.50:
+            recs.append({
+                "type": "global_tip",
+                "message": (
+                    f"Less than 20% of your total usage happens at night — "
+                    f"shifting loads could save up to {saving:.2f} BGN/month"
+                ),
+                "potential_saving_bgn": saving,
+                "device_name": None,
+            })
+
+    recs.sort(key=lambda r: r["potential_saving_bgn"], reverse=True)
+    return recs[:5]
+
+
 def _billing_cycle_bounds(now, cycle_start_day):
     """
     Return (cycle_start_dt, cycle_end_dt, total_days, days_elapsed) for the
@@ -227,6 +464,7 @@ def dashboard_data(request):
     )
 
     units = []
+    _devices_summary_list = []
     for hub in hubs:
         for emitter in hub.emitters.all():
             # Current state = last event
@@ -239,12 +477,12 @@ def dashboard_data(request):
             week_start  = today_start - timedelta(days=now.weekday())
             month_start = today_start.replace(day=1)
 
-            cost_today  = _cost_for_period(emitter, today_start)
-            cost_week   = _cost_for_period(emitter, week_start)
-            cost_month  = _cost_for_period(emitter, month_start)
+            cost_today  = _cost_for_period_tou(emitter, today_start)
+            cost_week   = _cost_for_period_tou(emitter, week_start)
+            cost_month  = _cost_for_period_tou(emitter, month_start)
 
             # Billing cycle cost + projection
-            cost_cycle = _cost_for_period(emitter, cycle_start_dt)
+            cost_cycle = _cost_for_period_tou(emitter, cycle_start_dt)
             cycle_projected = (
                 round(cost_cycle["cost_bgn"] / cycle_days_elapsed * cycle_total_days, 4)
                 if cycle_days_elapsed >= 0.5 else None
@@ -256,7 +494,7 @@ def dashboard_data(request):
                 .order_by("-ts").first()
             )
             cost_session = (
-                _cost_for_period(emitter, last_on.ts)
+                _cost_for_period_tou(emitter, last_on.ts)
                 if last_on else {"kwh": 0, "cost_bgn": 0}
             )
 
@@ -275,16 +513,52 @@ def dashboard_data(request):
                     "outdoor_c":   last_event.outdoor_temp_c if last_event else None,
                 } if last_event else {},
                 "cost": {
-                    "session_bgn":       cost_session["cost_bgn"],
-                    "session_kwh":       cost_session["kwh"],
-                    "today_bgn":         cost_today["cost_bgn"],
-                    "today_kwh":         cost_today["kwh"],
-                    "week_bgn":          cost_week["cost_bgn"],
-                    "month_bgn":         cost_month["cost_bgn"],
-                    "cycle_bgn":         cost_cycle["cost_bgn"],
+                    "session_bgn":         cost_session["cost_bgn"],
+                    "session_kwh":         cost_session["kwh"],
+                    "today_bgn":           cost_today["cost_bgn"],
+                    "today_kwh":           cost_today["kwh"],
+                    "today_day_bgn":       cost_today["cost_day_bgn"],
+                    "today_night_bgn":     cost_today["cost_night_bgn"],
+                    "today_day_kwh":       cost_today["kwh_day"],
+                    "today_night_kwh":     cost_today["kwh_night"],
+                    "week_bgn":            cost_week["cost_bgn"],
+                    "week_day_bgn":        cost_week["cost_day_bgn"],
+                    "week_night_bgn":      cost_week["cost_night_bgn"],
+                    "week_day_kwh":        cost_week["kwh_day"],
+                    "week_night_kwh":      cost_week["kwh_night"],
+                    "month_bgn":           cost_month["cost_bgn"],
+                    "cycle_bgn":           cost_cycle["cost_bgn"],
                     "cycle_projected_bgn": cycle_projected,
                 },
-                "daily": _daily_breakdown(emitter, days=7),
+                "daily":  _daily_breakdown_tou(emitter, days=7),
+                "hourly": _hourly_breakdown_ac(emitter, hours=24),
+            })
+
+            # Accumulate for recommendations
+            try:
+                sched = emitter.schedule
+                has_schedule = sched.enabled
+                # preheat start minute of day
+                wake_total_min = sched.wake_hour * 60 + sched.wake_minute
+                preheat_start_min = wake_total_min - sched.preheat_minutes
+                night_end_min = django_settings.NIGHT_END_HOUR * 60
+                preheat_starts_in_day = has_schedule and preheat_start_min >= night_end_min
+                # Estimate kWh for preheat window
+                avg_w = cost_week["avg_watts"] if cost_week["kwh"] > 0 else 300
+                preheat_kwh = avg_w * sched.preheat_minutes / 60 / 1000
+            except Schedule.DoesNotExist:
+                has_schedule = False
+                preheat_starts_in_day = False
+                preheat_kwh = 0
+
+            _devices_summary_list.append({
+                "name":               emitter.name,
+                "type":               "ac",
+                "kwh_day":            cost_week["kwh_day"],
+                "kwh_night":          cost_week["kwh_night"],
+                "has_schedule":       has_schedule,
+                "preheat_starts_in_day": preheat_starts_in_day,
+                "preheat_kwh_per_day":   preheat_kwh,
             })
 
     outdoor_temp = get_outdoor_temp()
@@ -308,11 +582,11 @@ def dashboard_data(request):
             week_start  = today_start - timedelta(days=now.weekday())
             month_start = today_start.replace(day=1)
 
-            cost_today  = _plug_cost_for_period(plug, today_start)
-            cost_week   = _plug_cost_for_period(plug, week_start)
-            cost_month  = _plug_cost_for_period(plug, month_start)
+            cost_today  = _plug_cost_for_period_tou(plug, today_start)
+            cost_week   = _plug_cost_for_period_tou(plug, week_start)
+            cost_month  = _plug_cost_for_period_tou(plug, month_start)
 
-            cost_cycle = _plug_cost_for_period(plug, cycle_start_dt)
+            cost_cycle = _plug_cost_for_period_tou(plug, cycle_start_dt)
             cycle_projected = (
                 round(cost_cycle["cost_bgn"] / cycle_days_elapsed * cycle_total_days, 4)
                 if cycle_days_elapsed >= 0.5 else None
@@ -323,7 +597,7 @@ def dashboard_data(request):
                 .order_by("-ts").first()
             )
             cost_session = (
-                _plug_cost_for_period(plug, last_on.ts)
+                _plug_cost_for_period_tou(plug, last_on.ts)
                 if last_on else {"kwh": 0, "cost_bgn": 0}
             )
 
@@ -350,12 +624,30 @@ def dashboard_data(request):
                     "session_kwh":         cost_session["kwh"],
                     "today_bgn":           cost_today["cost_bgn"],
                     "today_kwh":           cost_today["kwh"],
+                    "today_day_bgn":       cost_today["cost_day_bgn"],
+                    "today_night_bgn":     cost_today["cost_night_bgn"],
+                    "today_day_kwh":       cost_today["kwh_day"],
+                    "today_night_kwh":     cost_today["kwh_night"],
                     "week_bgn":            cost_week["cost_bgn"],
+                    "week_day_bgn":        cost_week["cost_day_bgn"],
+                    "week_night_bgn":      cost_week["cost_night_bgn"],
+                    "week_day_kwh":        cost_week["kwh_day"],
+                    "week_night_kwh":      cost_week["kwh_night"],
                     "month_bgn":           cost_month["cost_bgn"],
                     "cycle_bgn":           cost_cycle["cost_bgn"],
                     "cycle_projected_bgn": cycle_projected,
                 },
-                "daily": _plug_daily_breakdown(plug, days=7),
+                "daily":  _plug_daily_breakdown_tou(plug, days=7),
+                "hourly": _hourly_breakdown_plug(plug, hours=24),
+            })
+            _devices_summary_list.append({
+                "name":               plug.name,
+                "type":               "plug",
+                "kwh_day":            cost_week["kwh_day"],
+                "kwh_night":          cost_week["kwh_night"],
+                "has_schedule":       False,
+                "preheat_starts_in_day": False,
+                "preheat_kwh_per_day":   0,
             })
 
     hubs_list = []
@@ -395,6 +687,13 @@ def dashboard_data(request):
             "total_days":    cycle_total_days,
             "days_elapsed":  round(cycle_days_elapsed, 1),
         },
+        "tariff": {
+            "rate_day_bgn":   django_settings.ELECTRICITY_RATE_DAY_BGN,
+            "rate_night_bgn": django_settings.ELECTRICITY_RATE_NIGHT_BGN,
+            "night_start":    django_settings.NIGHT_START_HOUR,
+            "night_end":      django_settings.NIGHT_END_HOUR,
+        },
+        "recommendations": _recommendations(_devices_summary_list),
     })
 
 

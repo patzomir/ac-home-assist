@@ -21,6 +21,8 @@
     --muted:   #6b7280;
     --text:    #e2e8f0;
     --text2:   #94a3b8;
+    --night:   #7c3aed;
+    --day:     #f59e0b;
   }
 
   body {
@@ -248,6 +250,102 @@
     color: var(--red); margin-left: 6px; vertical-align: middle;
   }
 
+  /* --- Overview / ToU panel --- */
+  .overview-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 20px;
+    margin-bottom: 16px;
+  }
+  .tariff-info-bar {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+    font-size: 13px; color: var(--text2);
+  }
+  .tariff-info-bar .night-rate { color: var(--night); font-weight: 600; }
+  .tariff-info-bar .day-rate   { color: var(--day);   font-weight: 600; }
+  .tariff-info-bar .best-time  { margin-left: auto; font-size: 12px; color: var(--green); }
+
+  .tou-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+    margin: 14px 0 0;
+  }
+  .tou-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px;
+  }
+  .tou-card .tou-label {
+    font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
+  }
+  .tou-card .tou-amount {
+    font-size: 22px; font-weight: 700; margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tou-card .tou-sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+  .tou-card.day-card   .tou-amount { color: var(--day);   }
+  .tou-card.night-card .tou-amount { color: var(--night); }
+
+  /* --- Recommendations --- */
+  .rec-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 20px; margin-bottom: 16px;
+  }
+  .rec-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .rec-card {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px;
+  }
+  .rec-icon { font-size: 20px; flex-shrink: 0; line-height: 1.4; }
+  .rec-body { flex: 1; }
+  .rec-msg  { font-size: 13px; color: var(--text); }
+  .rec-saving { font-size: 12px; color: var(--green); font-weight: 600; margin-top: 3px; }
+
+  /* --- Overview charts --- */
+  .overview-chart-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 20px; margin-bottom: 16px;
+  }
+  .overview-chart-title {
+    font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .8px; margin-bottom: 12px;
+  }
+  .chart-wrap-lg { height: 160px; }
+  .chart-wrap-sm { height: 90px; }
+
+  /* --- Donut card --- */
+  .donut-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 20px; margin-bottom: 16px;
+    display: grid; grid-template-columns: auto 1fr; gap: 0 20px; align-items: center;
+  }
+  .donut-wrap { width: 180px; height: 180px; }
+
+  /* --- Heatmap --- */
+  .heatmap-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 20px; margin-bottom: 24px;
+    overflow-x: auto;
+  }
+  .heatmap-grid-wrap { min-width: 600px; }
+  .heatmap-hours {
+    display: grid; grid-template-columns: 40px repeat(24, 1fr);
+    gap: 2px; margin-bottom: 2px;
+  }
+  .heatmap-hours span { font-size: 9px; color: var(--muted); text-align: center; }
+  .heatmap-row {
+    display: grid; grid-template-columns: 40px repeat(24, 1fr); gap: 2px;
+    margin-bottom: 2px;
+  }
+  .heatmap-day-label { font-size: 10px; color: var(--muted); line-height: 18px; }
+  .heatmap-cell {
+    height: 18px; border-radius: 2px;
+    background: rgba(79,142,247,0.08);
+    transition: opacity .2s;
+  }
+
   /* --- Projection panel --- */
   .projection-panel {
     background: var(--surface);
@@ -339,6 +437,37 @@
     <span id="outdoor-label">Outdoor: —</span>
     <span id="time-label"></span>
     <span class="refresh-indicator" id="refresh-label">Refreshing…</span>
+  </div>
+
+  <!-- Overview: tariff bar + ToU summary + recommendations -->
+  <div id="overview-section" style="display:none">
+    <div class="overview-panel">
+      <div class="tariff-info-bar" id="tariff-info-bar"></div>
+      <div class="tou-summary-grid" id="tou-summary-grid"></div>
+    </div>
+
+    <div class="rec-panel" id="rec-panel" style="display:none">
+      <p class="section-label">Recommendations</p>
+      <div class="rec-list" id="rec-list"></div>
+    </div>
+
+    <div class="overview-chart-card">
+      <p class="overview-chart-title">Past 24 hours — all devices (day / night)</p>
+      <div class="chart-wrap-lg"><canvas id="chart-hourly-global"></canvas></div>
+    </div>
+
+    <div class="donut-card" id="donut-card">
+      <div class="donut-wrap"><canvas id="chart-donut"></canvas></div>
+      <div>
+        <p class="overview-chart-title" style="margin-bottom:8px">Cost by device — this week</p>
+        <div id="donut-legend" style="font-size:12px;color:var(--text2);line-height:1.8"></div>
+      </div>
+    </div>
+
+    <div class="heatmap-card" id="heatmap-card">
+      <p class="overview-chart-title" style="margin-bottom:10px">Usage heatmap — last 7 days (all devices)</p>
+      <div class="heatmap-grid-wrap" id="heatmap-grid"></div>
+    </div>
   </div>
 
   <!-- Projection panel -->
@@ -446,6 +575,14 @@ function render(data) {
     return;
   }
   emptyState.style.display = 'none';
+
+  /* overview: tariff, recommendations, global charts */
+  if (hasUnits || hasPlugs) {
+    document.getElementById('overview-section').style.display = '';
+    renderOverview(data);
+  } else {
+    document.getElementById('overview-section').style.display = 'none';
+  }
 
   /* projection panel */
   if ((hasUnits || hasPlugs) && data.cycle) {
@@ -691,8 +828,13 @@ function buildCard(u) {
     </div>
 
     <div class="chart-section">
-      <h3>7-day consumption (BGN/day)</h3>
+      <h3>7-day consumption — day vs night</h3>
       <div class="chart-wrap"><canvas id="chart-${u.id}"></canvas></div>
+    </div>
+
+    <div class="chart-section" style="border-top:none;padding-top:4px">
+      <h3>Past 24 hours</h3>
+      <div class="chart-wrap-sm"><canvas id="chart-h-${u.id}"></canvas></div>
     </div>
 
     <div class="schedule-section">
@@ -797,30 +939,196 @@ function updateCard(u) {
   }
   setText(`proj-cycle-${u.id}`, cost.cycle_bgn != null ? `${cost.cycle_bgn.toFixed(4)} so far` : '');
 
-  /* chart */
-  updateChart(`chart-${u.id}`, u.daily || []);
+  /* charts */
+  updateStackedDailyChart(`chart-${u.id}`, u.daily || []);
+  updateHourlyChart(`chart-h-${u.id}`, u.hourly || []);
+}
+
+/* ---------- overview / ToU ---------- */
+
+function renderOverview(data) {
+  const tariff = data.tariff || {};
+  const allDevices = [...(data.units || []), ...(data.plugs || [])];
+
+  // Tariff info bar
+  const infoBar = document.getElementById('tariff-info-bar');
+  if (infoBar && tariff.rate_day_bgn) {
+    const ns = String(tariff.night_start).padStart(2,'0');
+    const ne = String(tariff.night_end).padStart(2,'0');
+    infoBar.innerHTML =
+      `<span>Tariff zones:</span>` +
+      `<span class="night-rate">Night ${ns}:00–${ne}:00 · ${tariff.rate_night_bgn.toFixed(4)} BGN/kWh</span>` +
+      `<span style="color:var(--muted)">|</span>` +
+      `<span class="day-rate">Day · ${tariff.rate_day_bgn.toFixed(4)} BGN/kWh</span>` +
+      `<span class="best-time">Cheapest window: tonight ${ns}:00–${ne}:00</span>`;
+  }
+
+  // ToU summary cards (today totals)
+  let totDayKwh = 0, totNightKwh = 0, totDayCost = 0, totNightCost = 0;
+  allDevices.forEach(d => {
+    const c = d.cost || {};
+    totDayKwh    += c.today_day_kwh    || 0;
+    totNightKwh  += c.today_night_kwh  || 0;
+    totDayCost   += c.today_day_bgn    || 0;
+    totNightCost += c.today_night_bgn  || 0;
+  });
+  const grid = document.getElementById('tou-summary-grid');
+  if (grid) {
+    grid.innerHTML = `
+      <div class="tou-card day-card">
+        <div class="tou-label">Day kWh (today)</div>
+        <div class="tou-amount">${totDayKwh.toFixed(3)}</div>
+        <div class="tou-sub">kWh</div>
+      </div>
+      <div class="tou-card day-card">
+        <div class="tou-label">Day cost (today)</div>
+        <div class="tou-amount">${totDayCost.toFixed(4)}</div>
+        <div class="tou-sub">BGN</div>
+      </div>
+      <div class="tou-card night-card">
+        <div class="tou-label">Night kWh (today)</div>
+        <div class="tou-amount">${totNightKwh.toFixed(3)}</div>
+        <div class="tou-sub">kWh</div>
+      </div>
+      <div class="tou-card night-card">
+        <div class="tou-label">Night cost (today)</div>
+        <div class="tou-amount">${totNightCost.toFixed(4)}</div>
+        <div class="tou-sub">BGN</div>
+      </div>
+    `;
+  }
+
+  // Recommendations
+  renderRecommendations(data.recommendations || []);
+
+  // Global 24h hourly chart — sum across all devices
+  const hourlyMap = {};
+  allDevices.forEach(d => {
+    (d.hourly || []).forEach(h => {
+      if (!hourlyMap[h.hour]) hourlyMap[h.hour] = { kwh: 0, cost: 0, period: h.period, partial: h.partial };
+      hourlyMap[h.hour].kwh  += h.kwh;
+      hourlyMap[h.hour].cost += h.cost_bgn;
+    });
+  });
+  const sortedHours = Object.keys(hourlyMap).sort();
+  const globalHourly = sortedHours.map(h => ({ hour: h, ...hourlyMap[h] }));
+  updateHourlyChart('chart-hourly-global', globalHourly);
+
+  // Donut — weekly cost per device
+  updateDonutChart(allDevices);
+
+  // Heatmap — use daily breakdown
+  updateHeatmap(allDevices);
+}
+
+function renderRecommendations(recs) {
+  const panel = document.getElementById('rec-panel');
+  const list  = document.getElementById('rec-list');
+  if (!panel || !list) return;
+  if (!recs || recs.length === 0) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  const icons = { shift_ac: '❄️', shift_plug: '🔌', preheat_tip: '🌅', global_tip: '💡' };
+  list.innerHTML = recs.map(r => `
+    <div class="rec-card">
+      <div class="rec-icon">${icons[r.type] || '💡'}</div>
+      <div class="rec-body">
+        <div class="rec-msg">${esc(r.message)}</div>
+        ${r.potential_saving_bgn > 0
+          ? `<div class="rec-saving">Save ~${r.potential_saving_bgn.toFixed(2)} BGN/month</div>`
+          : ''}
+      </div>
+    </div>
+  `).join('');
 }
 
 /* ---------- chart ---------- */
 
-function updateChart(canvasId, daily) {
+function _chartScaleOpts() {
+  return {
+    x: {
+      grid: { color: 'rgba(46,51,80,0.5)' },
+      ticks: { color: '#6b7280', font: { size: 11 } },
+      stacked: true,
+    },
+    y: {
+      grid: { color: 'rgba(46,51,80,0.5)' },
+      ticks: { color: '#6b7280', font: { size: 11 }, callback: v => v.toFixed(2) },
+      beginAtZero: true,
+      stacked: true,
+    }
+  };
+}
+
+function updateStackedDailyChart(canvasId, daily) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
 
-  const labels = daily.map(d => d.date);
-  const values = daily.map(d => d.cost_bgn);
-  const maxVal = Math.max(...values, 0.01);
+  const labels    = daily.map(d => d.date);
+  const dayVals   = daily.map(d => d.day_cost_bgn   || 0);
+  const nightVals = daily.map(d => d.night_cost_bgn || 0);
 
-  const barColors = values.map(v =>
-    v > maxVal * 0.75 ? 'rgba(249,115,22,0.75)'
-    : v > maxVal * 0.4 ? 'rgba(79,142,247,0.75)'
-    : 'rgba(34,197,94,0.75)'
-  );
+  if (charts[canvasId]) {
+    charts[canvasId].data.labels = labels;
+    charts[canvasId].data.datasets[0].data = dayVals;
+    charts[canvasId].data.datasets[1].data = nightVals;
+    charts[canvasId].update('none');
+    return;
+  }
+
+  charts[canvasId] = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Day',
+          data: dayVals,
+          backgroundColor: 'rgba(245,158,11,0.75)',
+          borderRadius: 3,
+          borderSkipped: false,
+          stack: 'cost',
+        },
+        {
+          label: 'Night',
+          data: nightVals,
+          backgroundColor: 'rgba(124,58,237,0.75)',
+          borderRadius: 3,
+          borderSkipped: false,
+          stack: 'cost',
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 12 } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(4)} BGN (${ctx.dataset.label})` } }
+      },
+      scales: _chartScaleOpts(),
+    }
+  });
+}
+
+function updateHourlyChart(canvasId, hourly) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  if (!hourly || hourly.length === 0) return;
+
+  const labels  = hourly.map(h => h.hour);
+  const values  = hourly.map(h => h.kwh || 0);
+  const bgColors = hourly.map((h, i) => {
+    const isNight = h.period === 'night';
+    const alpha   = (h.partial) ? 0.35 : 0.70;
+    return isNight
+      ? `rgba(124,58,237,${alpha})`
+      : `rgba(245,158,11,${alpha})`;
+  });
 
   if (charts[canvasId]) {
     charts[canvasId].data.labels = labels;
     charts[canvasId].data.datasets[0].data = values;
-    charts[canvasId].data.datasets[0].backgroundColor = barColors;
+    charts[canvasId].data.datasets[0].backgroundColor = bgColors;
     charts[canvasId].update('none');
     return;
   }
@@ -831,8 +1139,8 @@ function updateChart(canvasId, daily) {
       labels,
       datasets: [{
         data: values,
-        backgroundColor: barColors,
-        borderRadius: 5,
+        backgroundColor: bgColors,
+        borderRadius: 2,
         borderSkipped: false,
       }]
     },
@@ -841,28 +1149,142 @@ function updateChart(canvasId, daily) {
       maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => ` ${ctx.parsed.y.toFixed(4)} BGN`
-          }
-        }
+        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(4)} kWh` } }
       },
       scales: {
         x: {
           grid: { color: 'rgba(46,51,80,0.5)' },
-          ticks: { color: '#6b7280', font: { size: 11 } }
+          ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 0,
+                   callback: (_, i) => (i % 3 === 0 ? labels[i] : '') }
         },
         y: {
           grid: { color: 'rgba(46,51,80,0.5)' },
-          ticks: {
-            color: '#6b7280', font: { size: 11 },
-            callback: v => v.toFixed(2)
-          },
+          ticks: { color: '#6b7280', font: { size: 10 }, callback: v => v.toFixed(3) },
           beginAtZero: true,
         }
       }
     }
   });
+}
+
+/* ---------- donut + heatmap ---------- */
+
+const DONUT_PALETTE = [
+  'rgba(79,142,247,0.85)',  'rgba(249,115,22,0.85)',  'rgba(34,197,94,0.85)',
+  'rgba(245,158,11,0.85)',  'rgba(124,58,237,0.85)',  'rgba(56,189,248,0.85)',
+  'rgba(239,68,68,0.85)',   'rgba(168,85,247,0.85)',
+];
+
+function updateDonutChart(devices) {
+  const canvas = document.getElementById('chart-donut');
+  if (!canvas) return;
+
+  const labels = [], values = [], colors = [];
+  devices.forEach((d, i) => {
+    const w = (d.cost || {}).week_bgn || 0;
+    if (w > 0) {
+      labels.push(d.name);
+      values.push(w);
+      colors.push(DONUT_PALETTE[i % DONUT_PALETTE.length]);
+    }
+  });
+
+  const legendEl = document.getElementById('donut-legend');
+  if (legendEl) {
+    legendEl.innerHTML = labels.map((l, i) =>
+      `<div style="display:flex;align-items:center;gap:6px">
+         <span style="width:10px;height:10px;border-radius:2px;background:${colors[i]};flex-shrink:0"></span>
+         ${esc(l)} — ${values[i].toFixed(4)} BGN
+       </div>`
+    ).join('');
+  }
+
+  if (charts['donut']) {
+    charts['donut'].data.labels  = labels;
+    charts['donut'].data.datasets[0].data = values;
+    charts['donut'].data.datasets[0].backgroundColor = colors;
+    charts['donut'].update('none');
+    return;
+  }
+  if (labels.length === 0) return;
+
+  charts['donut'] = new Chart(canvas, {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.toFixed(4)} BGN` } }
+      },
+      cutout: '62%',
+    }
+  });
+}
+
+function updateHeatmap(devices) {
+  const container = document.getElementById('heatmap-grid');
+  if (!container) return;
+
+  // Build 7 × 24 matrix from per-device daily breakdown (day_cost_bgn + night_cost_bgn → per-slot)
+  // We use the daily data to get day/night per-day totals, then we use hourly data if available
+  // to distribute within each day. Fallback: split proportionally using night tariff hours.
+  const DAYS = 7, HOURS = 24;
+  const matrix = Array.from({ length: DAYS }, () => new Float32Array(HOURS));
+
+  devices.forEach(dev => {
+    // Build per-hour data from hourly array (covers last 24h = today + part of yesterday)
+    const hourlyByHour = {};
+    (dev.hourly || []).forEach(h => {
+      const hr = parseInt(h.hour.split(':')[0], 10);
+      hourlyByHour[hr] = (hourlyByHour[hr] || 0) + (h.kwh || 0);
+    });
+
+    // For the most recent day, use hourly data
+    const todayRow = matrix[DAYS - 1];
+    Object.entries(hourlyByHour).forEach(([hr, kwh]) => {
+      todayRow[parseInt(hr, 10)] += kwh;
+    });
+
+    // For older days, distribute daily kWh proportionally across hours
+    // Use is_night_hour pattern: night hours get lower weight (they're cheaper)
+    const NIGHT_S = 22, NIGHT_E = 6;
+    function isNight(h) { return h >= NIGHT_S || h < NIGHT_E; }
+    (dev.daily || []).slice(0, DAYS - 1).forEach((day, di) => {
+      const totalKwh = day.kwh || 0;
+      if (totalKwh === 0) return;
+      const nightKwh = day.night_kwh || 0;
+      const dayKwh   = day.day_kwh   || 0;
+      const nightHrs = 8, dayHrs = 16;
+      for (let h = 0; h < HOURS; h++) {
+        matrix[di][h] += isNight(h)
+          ? nightKwh / nightHrs
+          : dayKwh   / dayHrs;
+      }
+    });
+  });
+
+  // Normalise to 0–1
+  let maxVal = 0;
+  for (let d = 0; d < DAYS; d++) for (let h = 0; h < HOURS; h++) if (matrix[d][h] > maxVal) maxVal = matrix[d][h];
+
+  // Build DOM
+  const hourLabels = Array.from({ length: HOURS }, (_, i) => i % 3 === 0 ? String(i).padStart(2,'0') : '');
+  const dayLabels  = (devices[0]?.daily || []).map(d => d.date.split(' ')[0]);
+  while (dayLabels.length < DAYS) dayLabels.unshift('');
+
+  let html = `<div class="heatmap-hours"><span></span>${hourLabels.map(l => `<span>${l}</span>`).join('')}</div>`;
+  for (let d = 0; d < DAYS; d++) {
+    html += `<div class="heatmap-row"><span class="heatmap-day-label">${esc(dayLabels[d] || '')}</span>`;
+    for (let h = 0; h < HOURS; h++) {
+      const intensity = maxVal > 0 ? matrix[d][h] / maxVal : 0;
+      const alpha = (0.06 + intensity * 0.80).toFixed(2);
+      html += `<div class="heatmap-cell" style="background:rgba(79,142,247,${alpha})" title="${matrix[d][h].toFixed(4)} kWh"></div>`;
+    }
+    html += `</div>`;
+  }
+  container.innerHTML = html;
 }
 
 /* ---------- schedule ---------- */
@@ -977,8 +1399,13 @@ function buildPlugCard(p) {
     </div>
 
     <div class="chart-section">
-      <h3>7-day consumption (BGN/day)</h3>
+      <h3>7-day consumption — day vs night</h3>
       <div class="chart-wrap"><canvas id="plug-chart-${p.id}"></canvas></div>
+    </div>
+
+    <div class="chart-section" style="border-top:none;padding-top:4px">
+      <h3>Past 24 hours</h3>
+      <div class="chart-wrap-sm"><canvas id="plug-chart-h-${p.id}"></canvas></div>
     </div>
   `;
 
@@ -1046,7 +1473,8 @@ function updatePlugCard(p) {
   }
   setText(`plug-proj-cycle-${p.id}`, cost.cycle_bgn != null ? `${cost.cycle_bgn.toFixed(4)} so far` : '');
 
-  updateChart(`plug-chart-${p.id}`, p.daily || []);
+  updateStackedDailyChart(`plug-chart-${p.id}`, p.daily || []);
+  updateHourlyChart(`plug-chart-h-${p.id}`, p.hourly || []);
 }
 
 /* ---------- rename ---------- */
