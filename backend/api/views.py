@@ -141,7 +141,7 @@ def _cost_for_period(emitter: IREmitter, since, until=None):
 def _daily_breakdown(emitter: IREmitter, days=7):
     """Return list of {date, kwh, cost_bgn} for the past N days."""
     result = []
-    now = timezone.now()
+    now = timezone.localtime(timezone.now())
     for d in range(days - 1, -1, -1):
         day_start = (now - timedelta(days=d)).replace(
             hour=0, minute=0, second=0, microsecond=0)
@@ -178,7 +178,7 @@ def _plug_cost_for_period(plug: SmartPlug, since, until=None):
 
 def _plug_daily_breakdown(plug: SmartPlug, days=7):
     result = []
-    now = timezone.now()
+    now = timezone.localtime(timezone.now())
     for d in range(days - 1, -1, -1):
         day_start = (now - timedelta(days=d)).replace(
             hour=0, minute=0, second=0, microsecond=0)
@@ -223,7 +223,7 @@ def _plug_cost_for_period_tou(plug: SmartPlug, since, until=None):
 def _daily_breakdown_tou(emitter: IREmitter, days=7):
     """Return list of {date, kwh, cost_bgn, day_kwh, day_cost_bgn, night_kwh, night_cost_bgn}."""
     result = []
-    now = timezone.now()
+    now = timezone.localtime(timezone.now())
     for d in range(days - 1, -1, -1):
         day_start = (now - timedelta(days=d)).replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + timedelta(days=1)
@@ -242,7 +242,7 @@ def _daily_breakdown_tou(emitter: IREmitter, days=7):
 
 def _plug_daily_breakdown_tou(plug: SmartPlug, days=7):
     result = []
-    now = timezone.now()
+    now = timezone.localtime(timezone.now())
     for d in range(days - 1, -1, -1):
         day_start = (now - timedelta(days=d)).replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + timedelta(days=1)
