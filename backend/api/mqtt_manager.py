@@ -5,11 +5,13 @@ Responsibilities:
 - Publish commands to hub/{hub_id}/commands (QoS 1) when a PendingCommand is created.
 - Subscribe to hub/+/status to track hub online/offline state (replaces heartbeat endpoint).
 - Subscribe to hub/+/plug/+/metering for smart plug power readings.
+- Subscribe to hub/+/network for on-demand Zigbee network scan results.
 
 Topic layout:
   hub/{hub_id}/commands              ← backend publishes, hub subscribes  (QoS 1)
   hub/{hub_id}/status                ← hub publishes "online" on connect, LWT sends "offline"
   hub/{hub_id}/plug/{addr}/metering  ← hub publishes plug power readings  (QoS 0)
+  hub/{hub_id}/network               ← hub publishes scan results: {"plugs": [addr, ...]}
 """
 
 import json
@@ -32,6 +34,7 @@ def _on_connect(client, userdata, flags, rc):
         client.subscribe([
             ("hub/+/status", 1),
             ("hub/+/plug/+/metering", 0),
+            ("hub/+/network", 1),
         ])
     else:
         logger.error("MQTT connection failed (rc=%d)", rc)
@@ -135,12 +138,55 @@ def _on_plug_metering(hub_id: str, addr_hex: str, raw_payload):
                 hub_id, short_addr, measured_watts, voltage_dv, current_ma)
 
 
+def _on_hub_network(hub_id: str, raw_payload):
+    """Handle hub/{hub_id}/network — reconcile SmartPlug records.
+
+    Expected payload: {"plugs": [2, 5, 8]}
+    Each value is a Zigbee short address (integer).
+    Creates plug records for any address not already in the DB.
+    """
+    try:
+        data = json.loads(raw_payload.decode())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        logger.warning("Invalid JSON in network scan from %s", hub_id)
+        return
+
+    addrs = data.get("plugs", [])
+    if not isinstance(addrs, list):
+        logger.warning("Unexpected network payload from %s: %r", hub_id, data)
+        return
+
+    from .models import Hub, SmartPlug
+
+    hub, _ = Hub.objects.get_or_create(
+        identifier=hub_id,
+        defaults={"name": f"Hub {hub_id[:8]}"},
+    )
+
+    for addr in addrs:
+        short_addr = int(addr)
+        _, created = SmartPlug.objects.get_or_create(
+            hub=hub,
+            short_addr=short_addr,
+            defaults={"name": f"Plug 0x{short_addr:04X}"},
+        )
+        if created:
+            logger.info("Network scan: new plug hub=%s addr=0x%04X", hub_id, short_addr)
+
+    hub.last_network_scan = {"ts": timezone.now().isoformat(), "addrs": [int(a) for a in addrs]}
+    hub.save(update_fields=["last_network_scan"])
+    logger.info("Network scan: hub=%s reported %d plug(s)", hub_id, len(addrs))
+
+
 def _on_message(client, userdata, msg):
     """Route incoming messages to the appropriate handler."""
     parts = msg.topic.split("/")
     # hub/{hub_id}/status
     if len(parts) == 3 and parts[2] == "status":
         _on_hub_status(parts[1], msg.payload)
+    # hub/{hub_id}/network
+    elif len(parts) == 3 and parts[2] == "network":
+        _on_hub_network(parts[1], msg.payload)
     # hub/{hub_id}/plug/{addr}/metering
     elif len(parts) == 5 and parts[2] == "plug" and parts[4] == "metering":
         _on_plug_metering(parts[1], parts[3], msg.payload)

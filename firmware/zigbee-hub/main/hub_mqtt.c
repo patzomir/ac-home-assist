@@ -195,6 +195,27 @@ void hub_mqtt_publish_metering(const plug_metering_t *m)
     free(payload);
 }
 
+void hub_mqtt_publish_network(const uint16_t *addrs, uint8_t count)
+{
+    if (!s_client) return;
+
+    char topic[64];
+    snprintf(topic, sizeof(topic), "hub/%s/network", s_hub_id);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr  = cJSON_AddArrayToObject(root, "plugs");
+    for (uint8_t i = 0; i < count; i++)
+        cJSON_AddItemToArray(arr, cJSON_CreateNumber(addrs[i]));
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!payload) return;
+
+    esp_mqtt_client_publish(s_client, topic, payload, 0, /*qos=*/1, /*retain=*/0);
+    ESP_LOGI(TAG, "Network scan → %s: %s", topic, payload);
+    free(payload);
+}
+
 esp_err_t hub_mqtt_init(mqtt_command_cb_t on_command)
 {
     s_on_command = on_command;

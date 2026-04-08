@@ -139,6 +139,24 @@ static void handle_set_ac(const cJSON *payload)
     ESP_LOGI(TAG, "set_ac: 0x%04x → %d°C mode=%d", addr, setpoint_c, mode);
 }
 
+static void handle_scan_network(void)
+{
+    uint8_t count = 0;
+    const ir_emitter_t *devices = zb_coordinator_get_emitters(&count);
+
+    uint16_t plug_addrs[MAX_EMITTERS];
+    uint8_t  plug_count = 0;
+
+    for (uint8_t i = 0; i < count; i++)
+    {
+        if (devices[i].device_type == DEVICE_SMART_PLUG)
+            plug_addrs[plug_count++] = devices[i].short_addr;
+    }
+
+    hub_mqtt_publish_network(plug_addrs, plug_count);
+    ESP_LOGI(TAG, "scan_network: reported %d plug(s)", plug_count);
+}
+
 static void handle_set_plug(const cJSON *payload)
 {
     cJSON *addr_item = cJSON_GetObjectItemCaseSensitive(payload, "addr");
@@ -163,6 +181,8 @@ static void on_mqtt_command(int cmd_id, const char *type, const cJSON *payload)
         handle_set_ac(payload);
     else if (strcmp(type, "set_plug") == 0)
         handle_set_plug(payload);
+    else if (strcmp(type, "scan_network") == 0)
+        handle_scan_network();
     else
         ESP_LOGW(TAG, "Unknown command type: %s (id=%d)", type, cmd_id);
 }

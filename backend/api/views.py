@@ -246,8 +246,16 @@ def dashboard_data(request):
 
     outdoor_temp = get_outdoor_temp()
 
+    # Build a per-hub set of addresses from the last network scan (if any).
+    hub_scan_addrs = {
+        hub.id: set(hub.last_network_scan["addrs"])
+        if hub.last_network_scan else None
+        for hub in hubs
+    }
+
     plugs = []
     for hub in hubs:
+        scan_addrs = hub_scan_addrs[hub.id]
         for plug in hub.plugs.all():
             last_event = (
                 SmartPlugEvent.objects.filter(plug=plug).order_by("-ts").first()
@@ -270,14 +278,21 @@ def dashboard_data(request):
                 if last_on else {"kwh": 0, "cost_bgn": 0}
             )
 
+            plug_online = bool(
+                plug.last_seen and (now - plug.last_seen).total_seconds() < 300
+            )
+            in_last_scan = (
+                plug.short_addr in scan_addrs if scan_addrs is not None else None
+            )
             plugs.append({
-                "id":        plug.id,
-                "name":      plug.name,
-                "addr":      f"0x{plug.short_addr:04X}",
-                "hub":       hub.name,
-                "online":    plug.online,
-                "power_on":  plug.power_on,
-                "last_seen": plug.last_seen.isoformat() if plug.last_seen else None,
+                "id":           plug.id,
+                "name":         plug.name,
+                "addr":         f"0x{plug.short_addr:04X}",
+                "hub":          hub.name,
+                "online":       plug_online,
+                "power_on":     plug.power_on,
+                "last_seen":    plug.last_seen.isoformat() if plug.last_seen else None,
+                "in_last_scan": in_last_scan,
                 "current": {
                     "watts": last_event.measured_watts if last_event else 0,
                 },
@@ -295,6 +310,12 @@ def dashboard_data(request):
     hubs_list = []
     for hub in hubs:
         is_online = hub.last_seen and (now - hub.last_seen).total_seconds() < 300
+        scan = hub.last_network_scan  # {ts, addrs} or None
+        known_addrs = {p.short_addr for p in hub.plugs.all()}
+        unknown = (
+            [a for a in scan["addrs"] if a not in known_addrs]
+            if scan else []
+        )
         hubs_list.append({
             "id":            hub.id,
             "name":          hub.name,
@@ -303,6 +324,11 @@ def dashboard_data(request):
             "last_seen":     hub.last_seen.isoformat() if hub.last_seen else None,
             "emitter_count": hub.emitters.count(),
             "plug_count":    hub.plugs.count(),
+            "last_scan": {
+                "ts":      scan["ts"],
+                "count":   len(scan["addrs"]),
+                "unknown": unknown,
+            } if scan else None,
         })
 
     return Response({
@@ -623,6 +649,27 @@ def update_hub(request, hub_pk):
         hub.save(update_fields=["name"])
 
     return Response({"id": hub.id, "name": hub.name})
+
+
+@api_view(["POST"])
+def scan_hub_network(request, hub_pk):
+    """Queue a scan_network command for the hub.
+
+    The hub will respond on hub/{hub_id}/network with its active Zigbee
+    addresses. mqtt_manager will reconcile SmartPlug records on arrival.
+    """
+    try:
+        hub = Hub.objects.get(pk=hub_pk)
+    except Hub.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    cmd = PendingCommand.objects.create(
+        hub=hub,
+        command_type="scan_network",
+        payload={},
+    )
+    mqtt_manager.publish_command(hub.identifier, cmd.id, cmd.command_type, {})
+    return Response({"queued": True})
 
 
 # ---------------------------------------------------------------------------

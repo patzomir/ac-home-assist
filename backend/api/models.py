@@ -4,12 +4,13 @@ from django.utils import timezone
 
 class Hub(models.Model):
     """One per home. Identified by its MAC / UUID set in firmware."""
-    identifier  = models.CharField(max_length=64, unique=True)
-    name        = models.CharField(max_length=128, default="Home Hub")
-    latitude    = models.FloatField(default=42.6977)
-    longitude   = models.FloatField(default=23.3219)
-    last_seen   = models.DateTimeField(null=True, blank=True)
-    created_at  = models.DateTimeField(auto_now_add=True)
+    identifier          = models.CharField(max_length=64, unique=True)
+    name                = models.CharField(max_length=128, default="Home Hub")
+    latitude            = models.FloatField(default=42.6977)
+    longitude           = models.FloatField(default=23.3219)
+    last_seen           = models.DateTimeField(null=True, blank=True)
+    last_network_scan   = models.JSONField(null=True, blank=True)
+    created_at          = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.name} ({self.identifier})"
@@ -136,9 +137,10 @@ class PendingCommand(models.Model):
     Hub polls GET /api/commands/{hub_id}/ and marks commands delivered.
     """
     TYPE_CHOICES = [
-        ("set_schedule", "Set Schedule"),
-        ("set_ac",       "Set AC State"),
-        ("set_plug",     "Set Plug State"),
+        ("set_schedule",   "Set Schedule"),
+        ("set_ac",         "Set AC State"),
+        ("set_plug",       "Set Plug State"),
+        ("scan_network",   "Scan Zigbee Network"),
     ]
 
     hub          = models.ForeignKey(Hub, on_delete=models.CASCADE,

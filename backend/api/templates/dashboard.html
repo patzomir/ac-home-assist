@@ -227,6 +227,22 @@
   .hub-card .hub-devices {
     font-size: 11px; color: var(--text2); margin-top: 4px;
   }
+  .btn-scan {
+    font-size: 11px; padding: 5px 10px; border-radius: 6px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text2); cursor: pointer; white-space: nowrap;
+  }
+  .btn-scan:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .btn-scan:disabled { opacity: .5; cursor: default; }
+  .hub-scan-info { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .hub-scan-info .unknown-addr {
+    color: var(--red); font-weight: 600;
+  }
+  .absent-badge {
+    display: inline-block; font-size: 10px; padding: 2px 6px;
+    border-radius: 4px; background: color-mix(in srgb, var(--red) 15%, transparent);
+    color: var(--red); margin-left: 6px; vertical-align: middle;
+  }
 
   /* --- Section headers --- */
   .devices-section { margin-bottom: 28px; }
@@ -394,10 +410,48 @@ function buildHubCard(h) {
       <div class="hub-meta" id="hub-id-${h.id}">${esc(h.identifier.slice(0, 16))}</div>
       <div class="hub-devices" id="hub-devices-${h.id}"></div>
     </div>
+    <button class="btn-scan" id="hub-scan-${h.id}" title="Scan Zigbee network">Scan</button>
     <span class="type-badge">Hub</span>
   `;
   card.querySelector(`#hub-name-${h.id}`).addEventListener('click', () => renameHub(h.id));
+  card.querySelector(`#hub-scan-${h.id}`).addEventListener('click', () => scanHubNetwork(h.id));
+  // scan info line lives inside hub-info, added once
+  const scanInfo = document.createElement('div');
+  scanInfo.className = 'hub-scan-info';
+  scanInfo.id = `hub-scan-info-${h.id}`;
+  card.querySelector('.hub-info').appendChild(scanInfo);
   return card;
+}
+
+async function scanHubNetwork(hubId) {
+  const btn = document.getElementById(`hub-scan-${hubId}`);
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Scanning…';
+  try {
+    const res = await fetch(`${API}/hubs/pk/${hubId}/scan/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCsrfToken() },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`Scan failed (${res.status}):`, text);
+      btn.textContent = `Error ${res.status}`;
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Scan'; }, 3000);
+      return;
+    }
+    // Give the hub a moment to respond on MQTT, then refresh the dashboard.
+    btn.textContent = 'Waiting…';
+    setTimeout(async () => {
+      await fetchAndRender();
+      btn.disabled = false;
+      btn.textContent = 'Scan';
+    }, 3000);
+  } catch (e) {
+    console.error('Scan request failed', e);
+    btn.textContent = 'Error';
+    setTimeout(() => { btn.disabled = false; btn.textContent = 'Scan'; }, 3000);
+  }
 }
 
 function updateHubCard(h) {
@@ -413,6 +467,21 @@ function updateHubCard(h) {
     if (h.emitter_count > 0) parts.push(`${h.emitter_count} IR emitter${h.emitter_count > 1 ? 's' : ''}`);
     if (h.plug_count > 0)    parts.push(`${h.plug_count} plug${h.plug_count > 1 ? 's' : ''}`);
     devEl.textContent = parts.length ? parts.join(', ') : 'No devices paired';
+  }
+
+  const scanEl = document.getElementById(`hub-scan-info-${h.id}`);
+  if (scanEl) {
+    if (!h.last_scan) {
+      scanEl.textContent = '';
+    } else {
+      const ts = new Date(h.last_scan.ts).toLocaleTimeString();
+      let html = `Last scan ${ts} · ${h.last_scan.count} addr${h.last_scan.count !== 1 ? 's' : ''}`;
+      if (h.last_scan.unknown.length > 0) {
+        const addrs = h.last_scan.unknown.map(a => `0x${a.toString(16).toUpperCase().padStart(4,'0')}`).join(', ');
+        html += ` · <span class="unknown-addr">Unknown: ${esc(addrs)}</span>`;
+      }
+      scanEl.innerHTML = html;
+    }
   }
 }
 
@@ -666,7 +735,7 @@ async function saveSchedule(event, emitterId) {
   try {
     const res = await fetch(`${API}/emitters/${emitterId}/schedule/`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(res.status);
@@ -747,6 +816,23 @@ function updatePlugCard(p) {
   const dot = document.getElementById(`plug-dot-${p.id}`);
   if (dot) dot.classList.toggle('offline', !p.online);
 
+  // Absent-from-network badge — only shown when a scan has been run and plug wasn't in it
+  const nameEl = document.getElementById(`plug-name-${p.id}`);
+  if (nameEl) {
+    const existing = nameEl.parentElement.querySelector('.absent-badge');
+    if (p.in_last_scan === false) {
+      if (!existing) {
+        const badge = document.createElement('span');
+        badge.className = 'absent-badge';
+        badge.title = 'This plug was not found in the last network scan';
+        badge.textContent = 'not in network';
+        nameEl.insertAdjacentElement('afterend', badge);
+      }
+    } else {
+      if (existing) existing.remove();
+    }
+  }
+
   setText(`plug-watts-${p.id}`,
     cur.watts !== undefined
       ? `${cur.watts}<span class="unit-label"> W</span>`
@@ -788,7 +874,7 @@ async function renameHub(hubId) {
   try {
     const res = await fetch(`${API}/hubs/pk/${hubId}/`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
       body: JSON.stringify({ name: newName }),
     });
     if (!res.ok) throw new Error(res.status);
@@ -806,7 +892,7 @@ async function renameEmitter(emitterId) {
   try {
     const res = await fetch(`${API}/emitters/${emitterId}/`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
       body: JSON.stringify({ name: newName }),
     });
     if (!res.ok) throw new Error(res.status);
@@ -824,7 +910,7 @@ async function renamePlug(plugId) {
   try {
     const res = await fetch(`${API}/plugs/${plugId}/`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
       body: JSON.stringify({ name: newName }),
     });
     if (!res.ok) throw new Error(res.status);
@@ -859,6 +945,11 @@ function esc(s) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function getCsrfToken() {
+  const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return match ? match[1] : '';
 }
 
 /* ---------- boot ---------- */

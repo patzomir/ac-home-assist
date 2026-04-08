@@ -8,7 +8,8 @@ urlpatterns = [
     path("hubs/<str:hub_id>/commands/",      views.poll_commands,   name="poll-commands"),
 
     # Hub management
-    path("hubs/pk/<int:hub_pk>/",            views.update_hub,      name="update-hub"),
+    path("hubs/pk/<int:hub_pk>/",            views.update_hub,         name="update-hub"),
+    path("hubs/pk/<int:hub_pk>/scan/",       views.scan_hub_network,   name="scan-hub-network"),
 
     # Dashboard data
     path("dashboard/",                       views.dashboard_data,  name="dashboard-data"),
