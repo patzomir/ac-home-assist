@@ -4,10 +4,12 @@ MQTT client for the backend.
 Responsibilities:
 - Publish commands to hub/{hub_id}/commands (QoS 1) when a PendingCommand is created.
 - Subscribe to hub/+/status to track hub online/offline state (replaces heartbeat endpoint).
+- Subscribe to hub/+/plug/+/metering for smart plug power readings.
 
 Topic layout:
-  hub/{hub_id}/commands   ← backend publishes, hub subscribes  (QoS 1)
-  hub/{hub_id}/status     ← hub publishes "online" on connect, LWT sends "offline"
+  hub/{hub_id}/commands              ← backend publishes, hub subscribes  (QoS 1)
+  hub/{hub_id}/status                ← hub publishes "online" on connect, LWT sends "offline"
+  hub/{hub_id}/plug/{addr}/metering  ← hub publishes plug power readings  (QoS 0)
 """
 
 import json
@@ -16,6 +18,7 @@ import threading
 
 import paho.mqtt.client as mqtt
 from django.conf import settings
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +29,10 @@ _lock = threading.Lock()
 def _on_connect(client, userdata, flags, rc):
     if rc == 0:
         logger.info("MQTT connected to %s:%d", settings.MQTT_BROKER_HOST, settings.MQTT_BROKER_PORT)
-        client.subscribe("hub/+/status", qos=1)
+        client.subscribe([
+            ("hub/+/status", 1),
+            ("hub/+/plug/+/metering", 0),
+        ])
     else:
         logger.error("MQTT connection failed (rc=%d)", rc)
 
@@ -36,40 +42,108 @@ def _on_disconnect(client, userdata, rc):
         logger.warning("MQTT disconnected unexpectedly (rc=%d) — will reconnect", rc)
 
 
-def _on_message(client, userdata, msg):
-    """Update Hub.last_seen / online state from hub/{hub_id}/status messages."""
-    parts = msg.topic.split("/")
-    if len(parts) != 3:
-        return
-
-    hub_id = parts[1]
-
+def _on_hub_status(hub_id: str, raw_payload):
+    """Handle hub/{hub_id}/status — update Hub.last_seen."""
     try:
-        payload = json.loads(msg.payload.decode())
+        payload = json.loads(raw_payload.decode())
     except (json.JSONDecodeError, UnicodeDecodeError):
-        payload = msg.payload.decode().strip()
+        payload = raw_payload.decode().strip()
 
-    # Payload can be the plain string "online"/"offline" or a JSON object with a "status" key.
-    if isinstance(payload, dict):
-        hub_status = payload.get("status", "online")
-    else:
-        hub_status = payload
+    hub_status = payload.get("status", "online") if isinstance(payload, dict) else payload
 
-    # Import inside the function to avoid hitting Django's app registry before it's ready.
-    from django.utils import timezone
     from .models import Hub
 
     hub, _ = Hub.objects.get_or_create(
         identifier=hub_id,
         defaults={"name": f"Hub {hub_id[:8]}"},
     )
-
     if hub_status == "online":
         hub.last_seen = timezone.now()
         hub.save(update_fields=["last_seen"])
         logger.info("Hub %s online (MQTT)", hub_id)
     else:
         logger.info("Hub %s offline (MQTT LWT)", hub_id)
+
+
+def _on_plug_metering(hub_id: str, addr_hex: str, raw_payload):
+    """Handle hub/{hub_id}/plug/{addr}/metering — store SmartPlugEvent."""
+    try:
+        data = json.loads(raw_payload.decode())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        logger.warning("Invalid JSON in plug metering from %s/%s", hub_id, addr_hex)
+        return
+
+    from .models import Hub, SmartPlug, SmartPlugEvent
+
+    hub, _ = Hub.objects.get_or_create(
+        identifier=hub_id,
+        defaults={"name": f"Hub {hub_id[:8]}"},
+    )
+    hub.last_seen = timezone.now()
+    hub.save(update_fields=["last_seen"])
+
+    short_addr = int(addr_hex, 16)
+    plug, _ = SmartPlug.objects.get_or_create(
+        hub=hub,
+        short_addr=short_addr,
+        defaults={"name": f"Plug 0x{short_addr:04X}"},
+    )
+    plug.online = True
+    plug.last_seen = timezone.now()
+    plug.save(update_fields=["online", "last_seen"])
+
+    measured_watts = int(data["watts"])       if data.get("watts")      is not None else None
+    voltage_dv     = int(data["voltage_dv"])  if data.get("voltage_dv") is not None else None
+    current_ma     = int(data["current_ma"])  if data.get("current_ma") is not None else None
+    energy_wh      = int(data["energy_wh"])   if data.get("energy_wh")  is not None else None
+
+    ts = timezone.now()
+    if data.get("ts"):
+        from datetime import datetime
+        from datetime import timezone as dt_tz
+        ts = datetime.fromtimestamp(int(data["ts"]), tz=dt_tz.utc)
+
+    # Merge attributes from the same poll cycle (two cluster responses arrive within seconds).
+    MERGE_WINDOW_S = 60
+    window_start = ts - timezone.timedelta(seconds=MERGE_WINDOW_S)
+    existing = (SmartPlugEvent.objects
+                .filter(plug=plug, ts__gte=window_start)
+                .order_by("-ts")
+                .first())
+
+    if existing:
+        update_fields = []
+        for field, value in [("measured_watts", measured_watts), ("energy_wh", energy_wh),
+                              ("voltage_dv", voltage_dv), ("current_ma", current_ma)]:
+            if value is not None:
+                setattr(existing, field, value)
+                update_fields.append(field)
+        if update_fields:
+            existing.save(update_fields=update_fields)
+    else:
+        SmartPlugEvent.objects.create(
+            plug=plug,
+            power_on=True,
+            measured_watts=measured_watts or 0,
+            energy_wh=energy_wh,
+            voltage_dv=voltage_dv,
+            current_ma=current_ma,
+            ts=ts,
+        )
+
+    logger.info("Plug metering hub=%s addr=0x%04X %sW %smV %smA",
+                hub_id, short_addr, measured_watts, voltage_dv, current_ma)
+
+
+def _on_message(client, userdata, msg):
+    """Route incoming messages to the appropriate handler."""
+    parts = msg.topic.split("/")
+    # hub/{hub_id}/status
+    if len(parts) == 3 and parts[2] == "status":
+        _on_hub_status(parts[1], msg.payload)
+    # hub/{hub_id}/plug/{addr}/metering
+    elif len(parts) == 5 and parts[2] == "plug" and parts[4] == "metering":
+        _on_plug_metering(parts[1], parts[3], msg.payload)
 
 
 def start():

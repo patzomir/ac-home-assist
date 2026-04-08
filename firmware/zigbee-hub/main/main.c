@@ -39,11 +39,16 @@ static const char *TAG = "main";
 
 static ac_mode_t parse_mode(const char *s)
 {
-    if (!s)                      return AC_MODE_HEAT;
-    if (strcmp(s, "cool") == 0)  return AC_MODE_COOL;
-    if (strcmp(s, "fan")  == 0)  return AC_MODE_FAN;
-    if (strcmp(s, "auto") == 0)  return AC_MODE_AUTO;
-    if (strcmp(s, "off")  == 0)  return AC_MODE_OFF;
+    if (!s)
+        return AC_MODE_HEAT;
+    if (strcmp(s, "cool") == 0)
+        return AC_MODE_COOL;
+    if (strcmp(s, "fan") == 0)
+        return AC_MODE_FAN;
+    if (strcmp(s, "auto") == 0)
+        return AC_MODE_AUTO;
+    if (strcmp(s, "off") == 0)
+        return AC_MODE_OFF;
     return AC_MODE_HEAT;
 }
 
@@ -57,28 +62,32 @@ static void handle_set_schedule(const cJSON *payload)
     }
 
     ac_schedule_t sched = {
-        .short_addr     = (uint16_t)addr_item->valuedouble,
-        .mode           = parse_mode(cJSON_GetStringValue(
-                              cJSON_GetObjectItemCaseSensitive(payload, "mode"))),
+        .short_addr = (uint16_t)addr_item->valuedouble,
+        .mode = parse_mode(cJSON_GetStringValue(
+            cJSON_GetObjectItemCaseSensitive(payload, "mode"))),
         .comfort_temp_c = 21,
         .setback_temp_c = 18,
-        .sleep_hour     = 23,
-        .sleep_min      = 0,
-        .wake_hour      = 7,
-        .wake_min       = 0,
-        .preheat_min    = 45,
+        .sleep_hour = 23,
+        .sleep_min = 0,
+        .wake_hour = 7,
+        .wake_min = 0,
+        .preheat_min = 45,
     };
 
-#define _INT(key, field) \
-    do { cJSON *_i = cJSON_GetObjectItemCaseSensitive(payload, key); \
-         if (cJSON_IsNumber(_i)) sched.field = (uint8_t)_i->valuedouble; } while(0)
+#define _INT(key, field)                                            \
+    do                                                              \
+    {                                                               \
+        cJSON *_i = cJSON_GetObjectItemCaseSensitive(payload, key); \
+        if (cJSON_IsNumber(_i))                                     \
+            sched.field = (uint8_t)_i->valuedouble;                 \
+    } while (0)
 
-    _INT("comfort_temp_c",  comfort_temp_c);
-    _INT("setback_temp_c",  setback_temp_c);
-    _INT("sleep_hour",      sleep_hour);
-    _INT("sleep_minute",    sleep_min);
-    _INT("wake_hour",       wake_hour);
-    _INT("wake_minute",     wake_min);
+    _INT("comfort_temp_c", comfort_temp_c);
+    _INT("setback_temp_c", setback_temp_c);
+    _INT("sleep_hour", sleep_hour);
+    _INT("sleep_minute", sleep_min);
+    _INT("wake_hour", wake_hour);
+    _INT("wake_minute", wake_min);
     _INT("preheat_minutes", preheat_min);
 #undef _INT
 
@@ -95,7 +104,7 @@ static void handle_set_schedule(const cJSON *payload)
                       "wake %02d:%02d → %d°C)",
                  sched.short_addr,
                  sched.sleep_hour, sched.sleep_min, sched.setback_temp_c,
-                 sched.wake_hour,  sched.wake_min,  sched.comfort_temp_c);
+                 sched.wake_hour, sched.wake_min, sched.comfort_temp_c);
     }
 }
 
@@ -110,7 +119,7 @@ static void handle_set_ac(const cJSON *payload)
     uint16_t addr = (uint16_t)addr_item->valuedouble;
 
     cJSON *power_item = cJSON_GetObjectItemCaseSensitive(payload, "power");
-    bool power_on = !cJSON_IsFalse(power_item);  /* default on */
+    bool power_on = !cJSON_IsFalse(power_item); /* default on */
 
     if (!power_on)
     {
@@ -132,15 +141,15 @@ static void handle_set_ac(const cJSON *payload)
 
 static void handle_set_plug(const cJSON *payload)
 {
-    cJSON *addr_item  = cJSON_GetObjectItemCaseSensitive(payload, "addr");
+    cJSON *addr_item = cJSON_GetObjectItemCaseSensitive(payload, "addr");
     cJSON *power_item = cJSON_GetObjectItemCaseSensitive(payload, "power");
     if (!cJSON_IsNumber(addr_item))
     {
         ESP_LOGW(TAG, "set_plug: missing addr");
         return;
     }
-    uint16_t addr    = (uint16_t)addr_item->valuedouble;
-    bool     power_on = !cJSON_IsFalse(power_item);
+    uint16_t addr = (uint16_t)addr_item->valuedouble;
+    bool power_on = !cJSON_IsFalse(power_item);
 
     zb_coordinator_send_power(addr, power_on);
     ESP_LOGI(TAG, "set_plug: 0x%04x → %s", addr, power_on ? "ON" : "OFF");
@@ -212,7 +221,7 @@ static void on_cmd_ack(uint16_t short_addr, bool success)
 
 static void on_plug_metering(const plug_metering_t *reading)
 {
-    http_reporter_send_metering(reading);
+    hub_mqtt_publish_metering(reading);
 }
 
 /* ---- WiFi callbacks ----------------------------------------------------- */
