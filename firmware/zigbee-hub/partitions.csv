@@ -1,8 +1,8 @@
 # ESP32-C6 Zigbee Hub — 4 MB flash
 # Name,      Type, SubType,  Offset,   Size,  Flags
-nvs,         data, nvs,      0x9000,   24K,
-phy_init,    data, phy,      0xf000,   4K,
-factory,     app,  factory,  0x10000,  2M,
-storage,     data, nvs,      0x210000, 64K,
-zb_storage,  data, fat,      0x220000, 512K,
-zb_fct,      data, fat,      0x2a0000, 128K,
+nvs,	data,	nvs,	0x9000,	0x6000,	
+phy_init,	data,	phy,	0xf000,	0x1000,	
+factory,	app,	factory,	0x10000,	0x300000,	
+storage,	data,	nvs,	0x310000,	0x10000,	
+zb_storage,	data,	fat,	0x320000,	0x80000,	
+zb_fct,	data,	fat,	0x3a0000,	0x20000,	

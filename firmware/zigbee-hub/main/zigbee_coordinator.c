@@ -508,10 +508,11 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
             }
         }
 
+        plug_metering_t m = { .short_addr = addr, .unix_ts = (uint32_t)time(NULL) };
+        bool any_decoded = false;
         for (const esp_zb_zcl_read_attr_resp_variable_t *v = msg->variables;
              v; v = v->next) {
             if (v->status != ESP_ZB_ZCL_STATUS_SUCCESS) continue;
-            plug_metering_t m = { .short_addr = addr, .unix_ts = (uint32_t)time(NULL) };
             bool decoded = false;
             if (cluster == ELEC_MEAS_CLUSTER_ID) {
                 decoded = decode_elec_meas_attr(v->attribute.id,
@@ -520,8 +521,9 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
                 decoded = decode_metering_attr(v->attribute.id,
                                                v->attribute.data.value, &m);
             }
-            if (decoded && s_cb.on_plug_metering) s_cb.on_plug_metering(&m);
+            if (decoded) any_decoded = true;
         }
+        if (any_decoded && s_cb.on_plug_metering) s_cb.on_plug_metering(&m);
         break;
     }
 

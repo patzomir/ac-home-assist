@@ -16,7 +16,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "corsheaders",
-    "api",
+    "drf_spectacular",
+    "api.apps.ApiConfig",
 ]
 
 MIDDLEWARE = [
@@ -59,9 +60,21 @@ USE_TZ = True
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "AC Home Assist API",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+# --- MQTT settings ------------------------------------------------------------
+
+MQTT_BROKER_HOST = os.environ.get("MQTT_BROKER_HOST", "localhost")
+MQTT_BROKER_PORT = int(os.environ.get("MQTT_BROKER_PORT", "1883"))
 
 # --- Project settings ---------------------------------------------------------
 

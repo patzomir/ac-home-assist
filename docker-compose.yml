@@ -1,0 +1,21 @@
+# Local development stack
+# Starts the MQTT broker. The Django backend is still run manually via run.sh.
+#
+# Usage:
+#   docker compose up -d
+#   cd backend && ./run.sh
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:

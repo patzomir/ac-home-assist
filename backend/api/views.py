@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from .models import Hub, IREmitter, ACEvent, Schedule, PendingCommand, SmartPlug, SmartPlugEvent
 from .energy_model import estimate_watts, compute_interval_cost
 from .weather import get_outdoor_temp
+from . import mqtt_manager
 
 logger = logging.getLogger(__name__)
 
@@ -370,22 +371,24 @@ def _schedule_to_dict(s: Schedule) -> dict:
 
 
 def _queue_schedule_command(hub: Hub, emitter: IREmitter, s: Schedule):
-    PendingCommand.objects.create(
+    payload = {
+        "addr":            emitter.short_addr,
+        "mode":            s.mode,
+        "comfort_temp_c":  s.comfort_temp_c,
+        "setback_temp_c":  s.setback_temp_c,
+        "sleep_hour":      s.sleep_hour,
+        "sleep_minute":    s.sleep_minute,
+        "wake_hour":       s.wake_hour,
+        "wake_minute":     s.wake_minute,
+        "preheat_minutes": s.preheat_minutes,
+        "enabled":         s.enabled,
+    }
+    cmd = PendingCommand.objects.create(
         hub=hub,
         command_type="set_schedule",
-        payload={
-            "addr":            emitter.short_addr,
-            "mode":            s.mode,
-            "comfort_temp_c":  s.comfort_temp_c,
-            "setback_temp_c":  s.setback_temp_c,
-            "sleep_hour":      s.sleep_hour,
-            "sleep_minute":    s.sleep_minute,
-            "wake_hour":       s.wake_hour,
-            "wake_minute":     s.wake_minute,
-            "preheat_minutes": s.preheat_minutes,
-            "enabled":         s.enabled,
-        },
+        payload=payload,
     )
+    mqtt_manager.publish_command(hub.identifier, cmd.id, cmd.command_type, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -412,18 +415,71 @@ def poll_commands(request, hub_id):
 # Emitter name update
 # ---------------------------------------------------------------------------
 
-@api_view(["PATCH"])
+def _delete_emitter(emitter):
+    """Clear hub NVS schedule via MQTT then remove the DB record."""
+    try:
+        emitter.schedule  # noqa: just checking existence
+        clear_payload = {"addr": emitter.short_addr, "enabled": False}
+        cmd = PendingCommand.objects.create(
+            hub=emitter.hub,
+            command_type="set_schedule",
+            payload=clear_payload,
+        )
+        mqtt_manager.publish_command(
+            emitter.hub.identifier, cmd.id, cmd.command_type, clear_payload
+        )
+    except Schedule.DoesNotExist:
+        pass
+    emitter.delete()
+
+
+@api_view(["PATCH", "DELETE"])
 def update_emitter(request, emitter_id):
     try:
         emitter = IREmitter.objects.get(pk=emitter_id)
     except IREmitter.DoesNotExist:
         return Response({"error": "not found"}, status=404)
 
+    if request.method == "DELETE":
+        _delete_emitter(emitter)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     if "name" in request.data:
         emitter.name = request.data["name"][:128]
         emitter.save(update_fields=["name"])
 
     return Response({"id": emitter.id, "name": emitter.name})
+
+
+@api_view(["DELETE"])
+def delete_emitter_by_addr(request, hub_id, addr):
+    """
+    Delete an IR emitter by Zigbee short address (hex like 0x8f87 or decimal).
+    If the emitter is not in the DB, still sends a schedule-clear to the hub NVS.
+    """
+    try:
+        short_addr = int(addr, 16) if addr.lower().startswith("0x") else int(addr)
+    except ValueError:
+        return Response({"error": "invalid addr"}, status=400)
+
+    hub = Hub.objects.filter(identifier=hub_id).first()
+    if not hub:
+        return Response({"error": "hub not found"}, status=404)
+
+    try:
+        emitter = IREmitter.objects.get(hub=hub, short_addr=short_addr)
+        _delete_emitter(emitter)
+    except IREmitter.DoesNotExist:
+        # Not in DB but may still have a schedule in NVS — clear it
+        clear_payload = {"addr": short_addr, "enabled": False}
+        cmd = PendingCommand.objects.create(
+            hub=hub,
+            command_type="set_schedule",
+            payload=clear_payload,
+        )
+        mqtt_manager.publish_command(hub.identifier, cmd.id, cmd.command_type, clear_payload)
+
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------
@@ -539,12 +595,14 @@ def control_plug(request, plug_id):
         return Response({"error": "not found"}, status=404)
 
     power_on = bool(request.data.get("power", True))
+    payload = {"addr": plug.short_addr, "power": power_on}
 
-    PendingCommand.objects.create(
+    cmd = PendingCommand.objects.create(
         hub=plug.hub,
         command_type="set_plug",
-        payload={"addr": plug.short_addr, "power": power_on},
+        payload=payload,
     )
+    mqtt_manager.publish_command(plug.hub.identifier, cmd.id, cmd.command_type, payload)
 
     return Response({"queued": True, "power": power_on})
 

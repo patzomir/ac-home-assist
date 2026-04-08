@@ -3,3 +3,5 @@ djangorestframework==3.15.*
 django-cors-headers==4.3.*
 requests==2.31.*
 apscheduler==3.10.*
+paho-mqtt>=1.6,<2.0
+drf-spectacular==0.28.*
