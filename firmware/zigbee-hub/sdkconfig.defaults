@@ -45,11 +45,18 @@ CONFIG_NVS_ENCRYPTION=n
 # SNTP for time sync
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
-# Logging
-CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+# UART console — disabled in production; use JTAG debugger or OTA logs instead
+CONFIG_ESP_CONSOLE_NONE=y
+
+# Compiler optimisation — size-optimised release build
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Logging — WARN in production to avoid leaking network/device info over UART
+# Change to CONFIG_LOG_DEFAULT_LEVEL_DEBUG=y locally when needed
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_LOG_MAXIMUM_LEVEL_WARN=y
 
 # Stack sizes
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
-CONFIG_ZB_DEBUG_MODE=y
+# CONFIG_ZB_DEBUG_MODE is not set
