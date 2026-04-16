@@ -1002,16 +1002,20 @@ function renderOverview(data) {
   renderRecommendations(data.recommendations || []);
 
   // Global 24h hourly chart — sum across all devices
+  // Preserve chronological order from the backend (oldest → current); do NOT sort by label.
   const hourlyMap = {};
+  const hourlyOrder = [];
   allDevices.forEach(d => {
     (d.hourly || []).forEach(h => {
-      if (!hourlyMap[h.hour]) hourlyMap[h.hour] = { kwh: 0, cost: 0, period: h.period, partial: h.partial };
+      if (!hourlyMap[h.hour]) {
+        hourlyMap[h.hour] = { kwh: 0, cost: 0, period: h.period, partial: h.partial };
+        hourlyOrder.push(h.hour);
+      }
       hourlyMap[h.hour].kwh  += h.kwh;
       hourlyMap[h.hour].cost += h.cost_bgn;
     });
   });
-  const sortedHours = Object.keys(hourlyMap).sort();
-  const globalHourly = sortedHours.map(h => ({ hour: h, ...hourlyMap[h] }));
+  const globalHourly = hourlyOrder.map(h => ({ hour: h, ...hourlyMap[h] }));
   updateHourlyChart('chart-hourly-global', globalHourly);
 
   // Donut — weekly cost per device
@@ -1234,17 +1238,19 @@ function updateHeatmap(devices) {
   const matrix = Array.from({ length: DAYS }, () => new Float32Array(HOURS));
 
   devices.forEach(dev => {
-    // Build per-hour data from hourly array (covers last 24h = today + part of yesterday)
-    const hourlyByHour = {};
-    (dev.hourly || []).forEach(h => {
-      const hr = parseInt(h.hour.split(':')[0], 10);
-      hourlyByHour[hr] = (hourlyByHour[hr] || 0) + (h.kwh || 0);
-    });
+    // The hourly array covers exactly the last 24 hours, oldest-first.
+    // The last entry is today's current (possibly partial) hour.
+    // Entries before the midnight wrap belong to yesterday; those from 00:00 onward are today.
+    const hourly = dev.hourly || [];
+    const currentHour = hourly.length > 0 ? parseInt(hourly[hourly.length - 1].hour.split(':')[0], 10) : -1;
+    const todayCount = currentHour >= 0 ? currentHour + 1 : 0;
+    const todayHourly = hourly.slice(hourly.length - todayCount);
 
-    // For the most recent day, use hourly data
+    // For the most recent day, use only today's hourly data
     const todayRow = matrix[DAYS - 1];
-    Object.entries(hourlyByHour).forEach(([hr, kwh]) => {
-      todayRow[parseInt(hr, 10)] += kwh;
+    todayHourly.forEach(h => {
+      const hr = parseInt(h.hour.split(':')[0], 10);
+      todayRow[hr] += (h.kwh || 0);
     });
 
     // For older days, distribute daily kWh proportionally across hours

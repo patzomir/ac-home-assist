@@ -1,8 +1,6 @@
 /*
- * hub_mqtt.c — MQTT client for command subscription and hub status / LWT.
- *
- * Keeps HTTP for AC-event and metering uploads (http_reporter.c) — only the
- * backend→hub command path moves to MQTT.
+ * hub_mqtt.c — MQTT client for command subscription, hub status / LWT,
+ * AC-event and metering uploads.
  */
 
 #include "hub_mqtt.h"

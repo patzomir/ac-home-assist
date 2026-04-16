@@ -3,7 +3,7 @@
  *
  * Roles:
  *   - Zigbee Coordinator: forms the network, pairs ESP32-H2 IR emitters
- *   - WiFi STA: reports AC events to backend HTTP API
+ *   - WiFi STA: reports AC events to backend via MQTT
  *   - MQTT client: receives commands from backend instantly (no polling)
  *   - Scheduler: applies night-setback / preheat schedule via esp_timer
  *
@@ -13,7 +13,6 @@
 #include "zigbee_coordinator.h"
 #include "wifi_manager.h"
 #include "ac_schedule.h"
-#include "http_reporter.h"
 #include "hub_mqtt.h"
 #include "nvs_store.h"
 
@@ -282,7 +281,6 @@ static void wifi_connected_task(void *arg)
 
     /* Start subsystems that need a working clock and network */
     ac_schedule_init();
-    http_reporter_init();
     hub_mqtt_init(on_mqtt_command);
 
     vTaskDelete(NULL);

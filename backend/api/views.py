@@ -220,13 +220,79 @@ def _plug_cost_for_period_tou(plug: SmartPlug, since, until=None):
     return compute_interval_cost_tou(events)
 
 
+def _plug_cost_for_period_wh(plug: SmartPlug, since, until=None):
+    """
+    Cost for [since, until] using energy_wh counter differences.
+
+    For each consecutive pair of energy_wh readings the day/night split is
+    determined by the fraction of wall-clock time that falls in each tariff
+    zone (via split_interval_by_period).  Falls back to the measured_watts
+    estimate when energy_wh data is insufficient.
+    """
+    until = until or timezone.now()
+
+    events_with_wh = list(
+        SmartPlugEvent.objects
+        .filter(plug=plug, energy_wh__isnull=False, ts__lte=until)
+        .order_by("ts")
+    )
+
+    before_since = [e for e in events_with_wh if e.ts <= since]
+    in_range     = [e for e in events_with_wh if e.ts >  since]
+
+    # Anchor the sequence at 'since' using the last known reading before it.
+    if before_since:
+        sequence = [(since, before_since[-1].energy_wh)] + \
+                   [(e.ts, e.energy_wh) for e in in_range]
+    else:
+        sequence = [(e.ts, e.energy_wh) for e in in_range]
+
+    if len(sequence) < 2:
+        return _plug_cost_for_period_tou(plug, since, until)
+
+    kwh_day = 0.0
+    kwh_night = 0.0
+
+    for i in range(len(sequence) - 1):
+        t1, wh1 = sequence[i]
+        t2, wh2 = sequence[i + 1]
+        delta_wh = wh2 - wh1
+        if delta_wh <= 0:
+            continue
+        # split_interval_by_period gives us day/night time fractions.
+        split = split_interval_by_period(t1, t2, 1000)
+        frac_kwh = split["kwh"]
+        if frac_kwh > 0:
+            frac_day   = split["kwh_day"]   / frac_kwh
+            frac_night = split["kwh_night"] / frac_kwh
+        else:
+            local_t1 = timezone.localtime(t1)
+            frac_day, frac_night = (0.0, 1.0) if is_night_hour(local_t1.hour) else (1.0, 0.0)
+        actual_kwh = delta_wh / 1000.0
+        kwh_day   += actual_kwh * frac_day
+        kwh_night += actual_kwh * frac_night
+
+    rate_day   = django_settings.ELECTRICITY_RATE_DAY_BGN
+    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_BGN
+    total_kwh  = kwh_day + kwh_night
+    return {
+        "kwh":            round(total_kwh,  4),
+        "kwh_day":        round(kwh_day,    4),
+        "kwh_night":      round(kwh_night,  4),
+        "cost_bgn":       round(kwh_day * rate_day + kwh_night * rate_night, 4),
+        "cost_day_bgn":   round(kwh_day   * rate_day,   4),
+        "cost_night_bgn": round(kwh_night * rate_night, 4),
+        "avg_watts":      0.0,
+    }
+
+
 def _daily_breakdown_tou(emitter: IREmitter, days=7):
     """Return list of {date, kwh, cost_bgn, day_kwh, day_cost_bgn, night_kwh, night_cost_bgn}."""
     result = []
     now = timezone.localtime(timezone.now())
     for d in range(days - 1, -1, -1):
         day_start = (now - timedelta(days=d)).replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
+        day_end = min(day_start + timedelta(days=1), now)
         cost = _cost_for_period_tou(emitter, day_start, day_end)
         result.append({
             "date":           day_start.strftime("%a %d/%m"),
@@ -241,21 +307,72 @@ def _daily_breakdown_tou(emitter: IREmitter, days=7):
 
 
 def _plug_daily_breakdown_tou(plug: SmartPlug, days=7):
+    rate_day      = django_settings.ELECTRICITY_RATE_DAY_BGN
+    rate_night    = django_settings.ELECTRICITY_RATE_NIGHT_BGN
+    night_start_h = django_settings.NIGHT_START_HOUR
+    night_end_h   = django_settings.NIGHT_END_HOUR
+
+    # Pre-fetch all events that carry the cumulative energy counter.
+    wh_events = list(
+        SmartPlugEvent.objects
+        .filter(plug=plug, energy_wh__isnull=False)
+        .order_by("ts")
+    )
+
+    def last_wh_at(t):
+        """Most recent energy_wh reading at or before time t."""
+        return next((e.energy_wh for e in reversed(wh_events) if e.ts <= t), None)
+
+    def wh_diff_kwh(t1, t2):
+        """kWh consumed between t1 and t2 from the counter, or None if unavailable."""
+        if t1 >= t2:
+            return 0.0
+        w1, w2 = last_wh_at(t1), last_wh_at(t2)
+        if w1 is None or w2 is None or w2 < w1:
+            return None
+        return (w2 - w1) / 1000.0
+
     result = []
     now = timezone.localtime(timezone.now())
     for d in range(days - 1, -1, -1):
         day_start = (now - timedelta(days=d)).replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
-        cost = _plug_cost_for_period_tou(plug, day_start, day_end)
-        result.append({
-            "date":           day_start.strftime("%a %d/%m"),
-            "kwh":            cost["kwh"],
-            "cost_bgn":       cost["cost_bgn"],
-            "day_kwh":        cost["kwh_day"],
-            "day_cost_bgn":   cost["cost_day_bgn"],
-            "night_kwh":      cost["kwh_night"],
-            "night_cost_bgn": cost["cost_night_bgn"],
-        })
+        day_end   = min(day_start + timedelta(days=1), now)
+
+        # Split the calendar day into its three tariff segments:
+        #   night₁  00:00 → NIGHT_END_HOUR   (e.g. 06:00)
+        #   day     NIGHT_END_HOUR → NIGHT_START_HOUR  (e.g. 06:00–22:00)
+        #   night₂  NIGHT_START_HOUR → 24:00
+        t_night1_end = min(day_start.replace(hour=night_end_h,   minute=0, second=0, microsecond=0), day_end)
+        t_day_end    = min(day_start.replace(hour=night_start_h, minute=0, second=0, microsecond=0), day_end)
+
+        night1_kwh = wh_diff_kwh(day_start,    t_night1_end)
+        day_kwh    = wh_diff_kwh(t_night1_end, t_day_end)
+        night2_kwh = wh_diff_kwh(t_day_end,    day_end)
+
+        if any(x is not None for x in [night1_kwh, day_kwh, night2_kwh]):
+            kwh_night = (night1_kwh or 0.0) + (night2_kwh or 0.0)
+            kwh_day   = day_kwh or 0.0
+            result.append({
+                "date":           day_start.strftime("%a %d/%m"),
+                "kwh":            round(kwh_night + kwh_day, 4),
+                "cost_bgn":       round(kwh_day * rate_day + kwh_night * rate_night, 4),
+                "day_kwh":        round(kwh_day, 4),
+                "day_cost_bgn":   round(kwh_day * rate_day, 4),
+                "night_kwh":      round(kwh_night, 4),
+                "night_cost_bgn": round(kwh_night * rate_night, 4),
+            })
+        else:
+            # Fall back to measured_watts-based estimate when energy_wh is absent.
+            cost = _plug_cost_for_period_tou(plug, day_start, day_end)
+            result.append({
+                "date":           day_start.strftime("%a %d/%m"),
+                "kwh":            cost["kwh"],
+                "cost_bgn":       cost["cost_bgn"],
+                "day_kwh":        cost["kwh_day"],
+                "day_cost_bgn":   cost["cost_day_bgn"],
+                "night_kwh":      cost["kwh_night"],
+                "night_cost_bgn": cost["cost_night_bgn"],
+            })
     return result
 
 
@@ -306,9 +423,18 @@ def _hourly_breakdown_ac(emitter: IREmitter, hours=24):
 
 
 def _hourly_breakdown_plug(plug: SmartPlug, hours=24):
+    rate_day   = django_settings.ELECTRICITY_RATE_DAY_BGN
+    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_BGN
     result = []
     now = timezone.now()
     current_hour_start = now.replace(minute=0, second=0, microsecond=0)
+
+    # Pre-fetch all events with energy_wh to avoid per-slot queries.
+    wh_events = list(
+        SmartPlugEvent.objects
+        .filter(plug=plug, energy_wh__isnull=False)
+        .order_by("ts")
+    )
 
     for h in range(hours - 1, -1, -1):
         slot_start = current_hour_start - timedelta(hours=h)
@@ -317,32 +443,46 @@ def _hourly_breakdown_plug(plug: SmartPlug, hours=24):
         if is_partial:
             slot_end = now
 
-        events = list(
-            SmartPlugEvent.objects
-            .filter(plug=plug, ts__lt=slot_end)
-            .order_by("ts")
-        )
-        slot_events = [e for e in events if e.ts >= slot_start]
-        leading = next((e for e in reversed(events) if e.ts < slot_start), None)
-        if leading:
-            stub = SmartPlugEvent(plug=plug, measured_watts=leading.measured_watts, ts=slot_start)
-            slot_events = [stub] + slot_events
-        if slot_events:
-            slot_events.append(SmartPlugEvent(
-                plug=plug,
-                measured_watts=slot_events[-1].measured_watts,
-                ts=slot_end,
-            ))
-        for e in slot_events:
-            e.estimated_watts = e.measured_watts
-
-        cost = compute_interval_cost_tou(slot_events)
         local_slot = timezone.localtime(slot_start)
+        is_night   = is_night_hour(local_slot.hour)
+
+        # Try energy_wh counter difference first (more reliable than measured_watts).
+        start_wh = next((e.energy_wh for e in reversed(wh_events) if e.ts <= slot_start), None)
+        end_wh   = next((e.energy_wh for e in reversed(wh_events) if e.ts <= slot_end),   None)
+
+        if start_wh is not None and end_wh is not None and end_wh >= start_wh:
+            kwh      = round((end_wh - start_wh) / 1000.0, 4)
+            rate     = rate_night if is_night else rate_day
+            cost_bgn = round(kwh * rate, 4)
+        else:
+            # Fall back to measured_watts-based estimate.
+            events = list(
+                SmartPlugEvent.objects
+                .filter(plug=plug, ts__lt=slot_end)
+                .order_by("ts")
+            )
+            slot_events = [e for e in events if e.ts >= slot_start]
+            leading = next((e for e in reversed(events) if e.ts < slot_start), None)
+            if leading:
+                stub = SmartPlugEvent(plug=plug, measured_watts=leading.measured_watts, ts=slot_start)
+                slot_events = [stub] + slot_events
+            if slot_events:
+                slot_events.append(SmartPlugEvent(
+                    plug=plug,
+                    measured_watts=slot_events[-1].measured_watts,
+                    ts=slot_end,
+                ))
+            for e in slot_events:
+                e.estimated_watts = e.measured_watts
+            c        = compute_interval_cost_tou(slot_events)
+            kwh      = c["kwh"]
+            cost_bgn = c["cost_bgn"]
+
         result.append({
             "hour":     local_slot.strftime("%H:00"),
-            "kwh":      cost["kwh"],
-            "cost_bgn": cost["cost_bgn"],
-            "period":   "night" if is_night_hour(local_slot.hour) else "day",
+            "kwh":      kwh,
+            "cost_bgn": cost_bgn,
+            "period":   "night" if is_night else "day",
             "partial":  is_partial,
         })
     return result
@@ -582,11 +722,11 @@ def dashboard_data(request):
             week_start  = today_start - timedelta(days=now.weekday())
             month_start = today_start.replace(day=1)
 
-            cost_today  = _plug_cost_for_period_tou(plug, today_start)
-            cost_week   = _plug_cost_for_period_tou(plug, week_start)
-            cost_month  = _plug_cost_for_period_tou(plug, month_start)
+            cost_today  = _plug_cost_for_period_wh(plug, today_start)
+            cost_week   = _plug_cost_for_period_wh(plug, week_start)
+            cost_month  = _plug_cost_for_period_wh(plug, month_start)
 
-            cost_cycle = _plug_cost_for_period_tou(plug, cycle_start_dt)
+            cost_cycle = _plug_cost_for_period_wh(plug, cycle_start_dt)
             cycle_projected = (
                 round(cost_cycle["cost_bgn"] / cycle_days_elapsed * cycle_total_days, 4)
                 if cycle_days_elapsed >= 0.5 else None
@@ -597,7 +737,7 @@ def dashboard_data(request):
                 .order_by("-ts").first()
             )
             cost_session = (
-                _plug_cost_for_period_tou(plug, last_on.ts)
+                _plug_cost_for_period_wh(plug, last_on.ts)
                 if last_on else {"kwh": 0, "cost_bgn": 0}
             )
 
