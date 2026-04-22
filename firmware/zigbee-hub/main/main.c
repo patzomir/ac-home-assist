@@ -138,6 +138,20 @@ static void handle_set_ac(const cJSON *payload)
     ESP_LOGI(TAG, "set_ac: 0x%04x → %d°C mode=%d", addr, setpoint_c, mode);
 }
 
+static void handle_open_join_window(const cJSON *payload)
+{
+    uint8_t duration_s = 60; /* default 60 s */
+    cJSON *dur = cJSON_GetObjectItemCaseSensitive(payload, "duration_s");
+    if (cJSON_IsNumber(dur) && dur->valuedouble > 0)
+        duration_s = (uint8_t)dur->valuedouble;
+
+    esp_err_t err = zb_coordinator_permit_join(duration_s);
+    if (err == ESP_OK)
+        ESP_LOGI(TAG, "open_join_window: permit join open for %d s", duration_s);
+    else
+        ESP_LOGW(TAG, "open_join_window: permit_join failed (%d)", err);
+}
+
 static void handle_scan_network(void)
 {
     uint8_t count = 0;
@@ -182,6 +196,8 @@ static void on_mqtt_command(int cmd_id, const char *type, const cJSON *payload)
         handle_set_plug(payload);
     else if (strcmp(type, "scan_network") == 0)
         handle_scan_network();
+    else if (strcmp(type, "open_join_window") == 0)
+        handle_open_join_window(payload);
     else
         ESP_LOGW(TAG, "Unknown command type: %s (id=%d)", type, cmd_id);
 }

@@ -240,6 +240,14 @@
   }
   .btn-scan:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .btn-scan:disabled { opacity: .5; cursor: default; }
+  .btn-reconnect {
+    font-size: 11px; padding: 5px 10px; border-radius: 6px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text2); cursor: pointer; white-space: nowrap;
+  }
+  .btn-reconnect:hover:not(:disabled) { border-color: var(--green); color: var(--green); }
+  .btn-reconnect:disabled { opacity: .5; cursor: default; }
+  .btn-reconnect.active { border-color: var(--green); color: var(--green); }
   .hub-scan-info { font-size: 11px; color: var(--muted); margin-top: 4px; }
   .hub-scan-info .unknown-addr {
     color: var(--red); font-weight: 600;
@@ -700,10 +708,12 @@ function buildHubCard(h) {
       <div class="hub-meta" id="hub-id-${h.id}">${esc(h.identifier.slice(0, 16))}</div>
       <div class="hub-devices" id="hub-devices-${h.id}"></div>
     </div>
+    <button class="btn-reconnect" id="hub-reconnect-${h.id}" title="Open Zigbee join window">Reconnect</button>
     <button class="btn-scan" id="hub-scan-${h.id}" title="Scan Zigbee network">Scan</button>
     <span class="type-badge">Hub</span>
   `;
   card.querySelector(`#hub-name-${h.id}`).addEventListener('click', () => renameHub(h.id));
+  card.querySelector(`#hub-reconnect-${h.id}`).addEventListener('click', () => openHubJoinWindow(h.id));
   card.querySelector(`#hub-scan-${h.id}`).addEventListener('click', () => scanHubNetwork(h.id));
   // scan info line lives inside hub-info, added once
   const scanInfo = document.createElement('div');
@@ -741,6 +751,37 @@ async function scanHubNetwork(hubId) {
     console.error('Scan request failed', e);
     btn.textContent = 'Error';
     setTimeout(() => { btn.disabled = false; btn.textContent = 'Scan'; }, 3000);
+  }
+}
+
+async function openHubJoinWindow(hubId) {
+  const btn = document.getElementById(`hub-reconnect-${hubId}`);
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Opening…';
+  try {
+    const res = await fetch(`${API}/hubs/pk/${hubId}/reconnect/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCsrfToken() },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`Reconnect failed (${res.status}):`, text);
+      btn.textContent = `Error ${res.status}`;
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Reconnect'; }, 3000);
+      return;
+    }
+    btn.classList.add('active');
+    btn.textContent = 'Window open';
+    setTimeout(() => {
+      btn.classList.remove('active');
+      btn.disabled = false;
+      btn.textContent = 'Reconnect';
+    }, 60000);
+  } catch (e) {
+    console.error('Reconnect request failed', e);
+    btn.textContent = 'Error';
+    setTimeout(() => { btn.disabled = false; btn.textContent = 'Reconnect'; }, 3000);
   }
 }
 

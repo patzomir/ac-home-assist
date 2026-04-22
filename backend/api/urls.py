@@ -10,6 +10,7 @@ urlpatterns = [
     # Hub management
     path("hubs/pk/<int:hub_pk>/",            views.update_hub,         name="update-hub"),
     path("hubs/pk/<int:hub_pk>/scan/",       views.scan_hub_network,   name="scan-hub-network"),
+    path("hubs/pk/<int:hub_pk>/reconnect/", views.reconnect_hub,      name="reconnect-hub"),
 
     # Dashboard data
     path("dashboard/",                       views.dashboard_data,  name="dashboard-data"),

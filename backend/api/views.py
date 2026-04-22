@@ -1169,6 +1169,27 @@ def scan_hub_network(request, hub_pk):
     return Response({"queued": True})
 
 
+@api_view(["POST"])
+def reconnect_hub(request, hub_pk):
+    """Queue an open_join_window command for the hub.
+
+    Instructs the hub to open the Zigbee permit-join window so new devices
+    can pair. The hub firmware controls the window duration.
+    """
+    try:
+        hub = Hub.objects.get(pk=hub_pk)
+    except Hub.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    cmd = PendingCommand.objects.create(
+        hub=hub,
+        command_type="open_join_window",
+        payload={},
+    )
+    mqtt_manager.publish_command(hub.identifier, cmd.id, cmd.command_type, {})
+    return Response({"queued": True})
+
+
 # ---------------------------------------------------------------------------
 # Smart plug name update
 # ---------------------------------------------------------------------------
