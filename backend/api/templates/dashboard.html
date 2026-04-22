@@ -661,8 +661,8 @@ function renderProjectionPanel(data) {
   let totalSpent = 0, totalProjected = 0, hasProjection = false;
   allDevices.forEach(d => {
     const c = d.cost || {};
-    totalSpent += c.cycle_bgn || 0;
-    if (c.cycle_projected_bgn != null) { totalProjected += c.cycle_projected_bgn; hasProjection = true; }
+    totalSpent += c.cycle_eur || 0;
+    if (c.cycle_projected_eur != null) { totalProjected += c.cycle_projected_eur; hasProjection = true; }
   });
 
   const totalsEl = document.getElementById('projection-totals');
@@ -670,13 +670,13 @@ function renderProjectionPanel(data) {
   totalsEl.innerHTML = `
     <div class="proj-card">
       <div class="proj-label">Spent this cycle</div>
-      <div class="proj-amount spent">${totalSpent.toFixed(2)} <span style="font-size:14px;font-weight:400;color:var(--text2)">BGN</span></div>
+      <div class="proj-amount spent">${totalSpent.toFixed(2)} <span style="font-size:14px;font-weight:400;color:var(--text2)">€</span></div>
       <div class="proj-sub">${cycle.days_elapsed.toFixed(1)} of ${cycle.total_days} days</div>
       <div class="proj-progress-bar"><div class="proj-progress-fill" style="width:${pct}%"></div></div>
     </div>
     <div class="proj-card">
       <div class="proj-label">Projected full cycle</div>
-      <div class="proj-amount projected">${hasProjection ? totalProjected.toFixed(2) : '—'} <span style="font-size:14px;font-weight:400;color:var(--text2)">${hasProjection ? 'BGN' : ''}</span></div>
+      <div class="proj-amount projected">${hasProjection ? totalProjected.toFixed(2) : '—'} <span style="font-size:14px;font-weight:400;color:var(--text2)">${hasProjection ? '€' : ''}</span></div>
       <div class="proj-sub">${hasProjection ? `at current rate · ${cycle.total_days}-day cycle` : 'Not enough data yet'}</div>
     </div>
   `;
@@ -801,7 +801,7 @@ function buildCard(u) {
       </div>
       <div class="session-cost">
         <div class="amount" id="session-cost-${u.id}">—</div>
-        <div class="label">BGN · session</div>
+        <div class="label">€ · session</div>
         <div class="sub" id="session-kwh-${u.id}"></div>
       </div>
     </div>
@@ -809,20 +809,20 @@ function buildCard(u) {
     <div class="cost-row">
       <div class="cost-cell">
         <div class="amount" id="today-${u.id}">—</div>
-        <div class="label">BGN today</div>
+        <div class="label">€ today</div>
         <div class="sub" id="today-kwh-${u.id}"></div>
       </div>
       <div class="cost-cell">
         <div class="amount" id="week-${u.id}">—</div>
-        <div class="label">BGN this week</div>
+        <div class="label">€ this week</div>
       </div>
       <div class="cost-cell">
         <div class="amount" id="month-${u.id}">—</div>
-        <div class="label">BGN this month</div>
+        <div class="label">€ this month</div>
       </div>
       <div class="cost-cell">
         <div class="amount" id="proj-${u.id}">—</div>
-        <div class="label">BGN projected</div>
+        <div class="label">€ projected</div>
         <div class="sub" id="proj-cycle-${u.id}"></div>
       </div>
     </div>
@@ -923,21 +923,21 @@ function updateCard(u) {
   }
 
   /* costs */
-  setText(`session-cost-${u.id}`, fmt(cost.session_bgn));
+  setText(`session-cost-${u.id}`, fmt(cost.session_eur));
   setText(`session-kwh-${u.id}`,  cost.session_kwh ? `${cost.session_kwh.toFixed(3)} kWh` : '');
-  setText(`today-${u.id}`,  fmt(cost.today_bgn));
+  setText(`today-${u.id}`,  fmt(cost.today_eur));
   setText(`today-kwh-${u.id}`, cost.today_kwh ? `${cost.today_kwh.toFixed(3)} kWh` : '');
-  setText(`week-${u.id}`,   fmt(cost.week_bgn));
-  setText(`month-${u.id}`,  fmt(cost.month_bgn));
+  setText(`week-${u.id}`,   fmt(cost.week_eur));
+  setText(`month-${u.id}`,  fmt(cost.month_eur));
 
   /* projected */
   const projEl = document.getElementById(`proj-${u.id}`);
   if (projEl) {
-    const hasProj = cost.cycle_projected_bgn != null;
-    projEl.textContent = hasProj ? cost.cycle_projected_bgn.toFixed(2) : '—';
+    const hasProj = cost.cycle_projected_eur != null;
+    projEl.textContent = hasProj ? cost.cycle_projected_eur.toFixed(2) : '—';
     projEl.style.color = hasProj ? 'var(--heat)' : '';
   }
-  setText(`proj-cycle-${u.id}`, cost.cycle_bgn != null ? `${cost.cycle_bgn.toFixed(4)} so far` : '');
+  setText(`proj-cycle-${u.id}`, cost.cycle_eur != null ? `${cost.cycle_eur.toFixed(4)} so far` : '');
 
   /* charts */
   updateStackedDailyChart(`chart-${u.id}`, u.daily || []);
@@ -952,14 +952,14 @@ function renderOverview(data) {
 
   // Tariff info bar
   const infoBar = document.getElementById('tariff-info-bar');
-  if (infoBar && tariff.rate_day_bgn) {
+  if (infoBar && tariff.rate_day_eur) {
     const ns = String(tariff.night_start).padStart(2,'0');
     const ne = String(tariff.night_end).padStart(2,'0');
     infoBar.innerHTML =
       `<span>Tariff zones:</span>` +
-      `<span class="night-rate">Night ${ns}:00–${ne}:00 · ${tariff.rate_night_bgn.toFixed(4)} BGN/kWh</span>` +
+      `<span class="night-rate">Night ${ns}:00–${ne}:00 · ${tariff.rate_night_eur.toFixed(4)} €/kWh</span>` +
       `<span style="color:var(--muted)">|</span>` +
-      `<span class="day-rate">Day · ${tariff.rate_day_bgn.toFixed(4)} BGN/kWh</span>` +
+      `<span class="day-rate">Day · ${tariff.rate_day_eur.toFixed(4)} €/kWh</span>` +
       `<span class="best-time">Cheapest window: tonight ${ns}:00–${ne}:00</span>`;
   }
 
@@ -969,8 +969,8 @@ function renderOverview(data) {
     const c = d.cost || {};
     totDayKwh    += c.today_day_kwh    || 0;
     totNightKwh  += c.today_night_kwh  || 0;
-    totDayCost   += c.today_day_bgn    || 0;
-    totNightCost += c.today_night_bgn  || 0;
+    totDayCost   += c.today_day_eur    || 0;
+    totNightCost += c.today_night_eur  || 0;
   });
   const grid = document.getElementById('tou-summary-grid');
   if (grid) {
@@ -983,7 +983,7 @@ function renderOverview(data) {
       <div class="tou-card day-card">
         <div class="tou-label">Day cost (today)</div>
         <div class="tou-amount">${totDayCost.toFixed(4)}</div>
-        <div class="tou-sub">BGN</div>
+        <div class="tou-sub">€</div>
       </div>
       <div class="tou-card night-card">
         <div class="tou-label">Night kWh (today)</div>
@@ -993,7 +993,7 @@ function renderOverview(data) {
       <div class="tou-card night-card">
         <div class="tou-label">Night cost (today)</div>
         <div class="tou-amount">${totNightCost.toFixed(4)}</div>
-        <div class="tou-sub">BGN</div>
+        <div class="tou-sub">€</div>
       </div>
     `;
   }
@@ -1012,7 +1012,7 @@ function renderOverview(data) {
         hourlyOrder.push(h.hour);
       }
       hourlyMap[h.hour].kwh  += h.kwh;
-      hourlyMap[h.hour].cost += h.cost_bgn;
+      hourlyMap[h.hour].cost += h.cost_eur;
     });
   });
   const globalHourly = hourlyOrder.map(h => ({ hour: h, ...hourlyMap[h] }));
@@ -1037,8 +1037,8 @@ function renderRecommendations(recs) {
       <div class="rec-icon">${icons[r.type] || '💡'}</div>
       <div class="rec-body">
         <div class="rec-msg">${esc(r.message)}</div>
-        ${r.potential_saving_bgn > 0
-          ? `<div class="rec-saving">Save ~${r.potential_saving_bgn.toFixed(2)} BGN/month</div>`
+        ${r.potential_saving_eur > 0
+          ? `<div class="rec-saving">Save ~${r.potential_saving_eur.toFixed(2)} €/month</div>`
           : ''}
       </div>
     </div>
@@ -1068,8 +1068,8 @@ function updateStackedDailyChart(canvasId, daily) {
   if (!canvas) return;
 
   const labels    = daily.map(d => d.date);
-  const dayVals   = daily.map(d => d.day_cost_bgn   || 0);
-  const nightVals = daily.map(d => d.night_cost_bgn || 0);
+  const dayVals   = daily.map(d => d.day_cost_eur   || 0);
+  const nightVals = daily.map(d => d.night_cost_eur || 0);
 
   if (charts[canvasId]) {
     charts[canvasId].data.labels = labels;
@@ -1107,7 +1107,7 @@ function updateStackedDailyChart(canvasId, daily) {
       maintainAspectRatio: false,
       plugins: {
         legend: { display: true, labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 12 } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(4)} BGN (${ctx.dataset.label})` } }
+        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(4)} € (${ctx.dataset.label})` } }
       },
       scales: _chartScaleOpts(),
     }
@@ -1185,7 +1185,7 @@ function updateDonutChart(devices) {
 
   const labels = [], values = [], colors = [];
   devices.forEach((d, i) => {
-    const w = (d.cost || {}).week_bgn || 0;
+    const w = (d.cost || {}).week_eur || 0;
     if (w > 0) {
       labels.push(d.name);
       values.push(w);
@@ -1198,7 +1198,7 @@ function updateDonutChart(devices) {
     legendEl.innerHTML = labels.map((l, i) =>
       `<div style="display:flex;align-items:center;gap:6px">
          <span style="width:10px;height:10px;border-radius:2px;background:${colors[i]};flex-shrink:0"></span>
-         ${esc(l)} — ${values[i].toFixed(4)} BGN
+         ${esc(l)} — ${values[i].toFixed(4)} €
        </div>`
     ).join('');
   }
@@ -1220,7 +1220,7 @@ function updateDonutChart(devices) {
       maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.toFixed(4)} BGN` } }
+        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.toFixed(4)} €` } }
       },
       cutout: '62%',
     }
@@ -1231,7 +1231,7 @@ function updateHeatmap(devices) {
   const container = document.getElementById('heatmap-grid');
   if (!container) return;
 
-  // Build 7 × 24 matrix from per-device daily breakdown (day_cost_bgn + night_cost_bgn → per-slot)
+  // Build 7 × 24 matrix from per-device daily breakdown (day_cost_eur + night_cost_eur → per-slot)
   // We use the daily data to get day/night per-day totals, then we use hourly data if available
   // to distribute within each day. Fallback: split proportionally using night tariff hours.
   const DAYS = 7, HOURS = 24;
@@ -1378,7 +1378,7 @@ function buildPlugCard(p) {
       </div>
       <div class="session-cost">
         <div class="amount" id="plug-session-cost-${p.id}">—</div>
-        <div class="label">BGN · session</div>
+        <div class="label">€ · session</div>
         <div class="sub" id="plug-session-kwh-${p.id}"></div>
       </div>
     </div>
@@ -1386,20 +1386,20 @@ function buildPlugCard(p) {
     <div class="cost-row">
       <div class="cost-cell">
         <div class="amount" id="plug-today-${p.id}">—</div>
-        <div class="label">BGN today</div>
+        <div class="label">€ today</div>
         <div class="sub" id="plug-today-kwh-${p.id}"></div>
       </div>
       <div class="cost-cell">
         <div class="amount" id="plug-week-${p.id}">—</div>
-        <div class="label">BGN this week</div>
+        <div class="label">€ this week</div>
       </div>
       <div class="cost-cell">
         <div class="amount" id="plug-month-${p.id}">—</div>
-        <div class="label">BGN this month</div>
+        <div class="label">€ this month</div>
       </div>
       <div class="cost-cell">
         <div class="amount" id="plug-proj-${p.id}">—</div>
-        <div class="label">BGN projected</div>
+        <div class="label">€ projected</div>
         <div class="sub" id="plug-proj-cycle-${p.id}"></div>
       </div>
     </div>
@@ -1463,21 +1463,21 @@ function updatePlugCard(p) {
     }
   }
 
-  setText(`plug-session-cost-${p.id}`, fmt(cost.session_bgn));
+  setText(`plug-session-cost-${p.id}`, fmt(cost.session_eur));
   setText(`plug-session-kwh-${p.id}`,  cost.session_kwh ? `${cost.session_kwh.toFixed(3)} kWh` : '');
-  setText(`plug-today-${p.id}`,  fmt(cost.today_bgn));
+  setText(`plug-today-${p.id}`,  fmt(cost.today_eur));
   setText(`plug-today-kwh-${p.id}`, cost.today_kwh ? `${cost.today_kwh.toFixed(3)} kWh` : '');
-  setText(`plug-week-${p.id}`,   fmt(cost.week_bgn));
-  setText(`plug-month-${p.id}`,  fmt(cost.month_bgn));
+  setText(`plug-week-${p.id}`,   fmt(cost.week_eur));
+  setText(`plug-month-${p.id}`,  fmt(cost.month_eur));
 
   /* projected */
   const plugProjEl = document.getElementById(`plug-proj-${p.id}`);
   if (plugProjEl) {
-    const hasProj = cost.cycle_projected_bgn != null;
-    plugProjEl.textContent = hasProj ? cost.cycle_projected_bgn.toFixed(2) : '—';
+    const hasProj = cost.cycle_projected_eur != null;
+    plugProjEl.textContent = hasProj ? cost.cycle_projected_eur.toFixed(2) : '—';
     plugProjEl.style.color = hasProj ? 'var(--heat)' : '';
   }
-  setText(`plug-proj-cycle-${p.id}`, cost.cycle_bgn != null ? `${cost.cycle_bgn.toFixed(4)} so far` : '');
+  setText(`plug-proj-cycle-${p.id}`, cost.cycle_eur != null ? `${cost.cycle_eur.toFixed(4)} so far` : '');
 
   updateStackedDailyChart(`plug-chart-${p.id}`, p.daily || []);
   updateHourlyChart(`plug-chart-h-${p.id}`, p.hourly || []);

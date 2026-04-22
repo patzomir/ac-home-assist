@@ -118,16 +118,19 @@ static void on_simple_desc_resp(esp_zb_zdp_status_t status,
 
         if (dtype == DEVICE_SMART_PLUG) {
             /* Bind standard measurement clusters so the plug knows its data
-               destination; polling is the primary data-fetch mechanism. */
+               destination; plugs push attribute reports at their own interval
+               (~5 min factory default for TS011F) which is sufficient for now.
+               Polling is disabled but kept for future use with other hardware. */
             bind_plug_cluster(pj->short_addr, pj->ieee_addr, ep,
                               ELEC_MEAS_CLUSTER_ID);
             bind_plug_cluster(pj->short_addr, pj->ieee_addr, ep,
                               ZCL_METERING_CLUSTER_ID);
             if (s_cb.on_plug_joined) s_cb.on_plug_joined(e);
+            /* Polling disabled — relying on device-pushed attribute reports.
             if (!s_poll_active) {
                 s_poll_active = true;
                 esp_zb_scheduler_alarm(poll_plugs, 0, PLUG_POLL_INTERVAL_MS);
-            }
+            } */
         } else {
             if (s_cb.on_device_joined) s_cb.on_device_joined(e);
         }
@@ -213,20 +216,17 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
 
             /* Smart plugs that survived a hub reboot stay associated and keep
-               sending bound attribute reports, but never send a device-announce
-               (they think they're already joined).  Start polling them now so
-               we don't rely on an announce that will never come. */
-            if (!s_poll_active) {
+               sending bound attribute reports at their own interval — no need
+               to poll. Polling disabled; kept for future hardware compatibility. */
+            /* if (!s_poll_active) {
                 for (int i = 0; i < s_emitter_count; i++) {
                     if (s_emitters[i].device_type == DEVICE_SMART_PLUG) {
                         s_poll_active = true;
-                        /* Short delay so the network is fully up before the
-                           first poll goes out. */
                         esp_zb_scheduler_alarm(poll_plugs, 0, 10000);
                         break;
                     }
                 }
-            }
+            } */
         }
         break;
 

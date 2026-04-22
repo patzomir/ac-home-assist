@@ -46,8 +46,8 @@ def kwh_from_watt_seconds(watts: int, seconds: float) -> float:
     return watts * seconds / 3_600_000.0
 
 
-def cost_bgn(kwh: float) -> float:
-    return round(kwh * settings.ELECTRICITY_RATE_BGN, 4)
+def cost_eur(kwh: float) -> float:
+    return round(kwh * settings.ELECTRICITY_RATE_EUR, 4)
 
 
 def is_night_hour(hour: int) -> bool:
@@ -81,13 +81,13 @@ def split_interval_by_period(t_start, t_end, watts: int) -> dict:
           "kwh":            float,
           "kwh_day":        float,
           "kwh_night":      float,
-          "cost_bgn":       float,
-          "cost_day_bgn":   float,
-          "cost_night_bgn": float,
+          "cost_eur":       float,
+          "cost_day_eur":   float,
+          "cost_night_eur": float,
         }
     """
     zeros = {"kwh": 0.0, "kwh_day": 0.0, "kwh_night": 0.0,
-             "cost_bgn": 0.0, "cost_day_bgn": 0.0, "cost_night_bgn": 0.0}
+             "cost_eur": 0.0, "cost_day_eur": 0.0, "cost_night_eur": 0.0}
     if t_start >= t_end:
         return zeros
 
@@ -110,15 +110,15 @@ def split_interval_by_period(t_start, t_end, watts: int) -> dict:
         cursor = slice_end
 
     total_kwh   = kwh_day + kwh_night
-    cost_day    = round(kwh_day   * settings.ELECTRICITY_RATE_DAY_BGN,   4)
-    cost_night  = round(kwh_night * settings.ELECTRICITY_RATE_NIGHT_BGN, 4)
+    cost_day    = round(kwh_day   * settings.ELECTRICITY_RATE_DAY_EUR,   4)
+    cost_night  = round(kwh_night * settings.ELECTRICITY_RATE_NIGHT_EUR, 4)
     return {
         "kwh":            round(total_kwh, 4),
         "kwh_day":        round(kwh_day,   4),
         "kwh_night":      round(kwh_night, 4),
-        "cost_bgn":       round(cost_day + cost_night, 4),
-        "cost_day_bgn":   cost_day,
-        "cost_night_bgn": cost_night,
+        "cost_eur":       round(cost_day + cost_night, 4),
+        "cost_day_eur":   cost_day,
+        "cost_night_eur": cost_night,
     }
 
 
@@ -130,13 +130,13 @@ def compute_interval_cost_tou(events) -> dict:
     Returns:
         {
           "kwh": float, "kwh_day": float, "kwh_night": float,
-          "cost_bgn": float, "cost_day_bgn": float, "cost_night_bgn": float,
+          "cost_eur": float, "cost_day_eur": float, "cost_night_eur": float,
           "avg_watts": float,
         }
     """
     events = list(events)
     totals = {"kwh": 0.0, "kwh_day": 0.0, "kwh_night": 0.0,
-              "cost_bgn": 0.0, "cost_day_bgn": 0.0, "cost_night_bgn": 0.0}
+              "cost_eur": 0.0, "cost_day_eur": 0.0, "cost_night_eur": 0.0}
     total_seconds = 0.0
 
     for i in range(len(events) - 1):
@@ -158,9 +158,9 @@ def compute_interval_cost_tou(events) -> dict:
         "kwh":            round(totals["kwh"],            4),
         "kwh_day":        round(totals["kwh_day"],        4),
         "kwh_night":      round(totals["kwh_night"],      4),
-        "cost_bgn":       round(totals["cost_bgn"],       4),
-        "cost_day_bgn":   round(totals["cost_day_bgn"],   4),
-        "cost_night_bgn": round(totals["cost_night_bgn"], 4),
+        "cost_eur":       round(totals["cost_eur"],       4),
+        "cost_day_eur":   round(totals["cost_day_eur"],   4),
+        "cost_night_eur": round(totals["cost_night_eur"], 4),
         "avg_watts":      round(avg_watts, 1),
     }
 
@@ -171,7 +171,7 @@ def compute_interval_cost(events) -> dict:
     energy and cost over the period covered by the events.
 
     Returns:
-        {"kwh": float, "cost_bgn": float, "avg_watts": float}
+        {"kwh": float, "cost_eur": float, "avg_watts": float}
     """
     events = list(events)
     total_wh     = 0.0
@@ -191,6 +191,6 @@ def compute_interval_cost(events) -> dict:
 
     return {
         "kwh":      round(total_kwh, 4),
-        "cost_bgn": cost_bgn(total_kwh),
+        "cost_eur": cost_eur(total_kwh),
         "avg_watts": round(avg_watts, 1),
     }

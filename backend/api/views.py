@@ -139,7 +139,7 @@ def _cost_for_period(emitter: IREmitter, since, until=None):
 
 
 def _daily_breakdown(emitter: IREmitter, days=7):
-    """Return list of {date, kwh, cost_bgn} for the past N days."""
+    """Return list of {date, kwh, cost_eur} for the past N days."""
     result = []
     now = timezone.localtime(timezone.now())
     for d in range(days - 1, -1, -1):
@@ -150,7 +150,7 @@ def _daily_breakdown(emitter: IREmitter, days=7):
         result.append({
             "date":     day_start.strftime("%a %d/%m"),
             "kwh":      cost["kwh"],
-            "cost_bgn": cost["cost_bgn"],
+            "cost_eur": cost["cost_eur"],
         })
     return result
 
@@ -187,7 +187,7 @@ def _plug_daily_breakdown(plug: SmartPlug, days=7):
         result.append({
             "date":     day_start.strftime("%a %d/%m"),
             "kwh":      cost["kwh"],
-            "cost_bgn": cost["cost_bgn"],
+            "cost_eur": cost["cost_eur"],
         })
     return result
 
@@ -272,22 +272,22 @@ def _plug_cost_for_period_wh(plug: SmartPlug, since, until=None):
         kwh_day   += actual_kwh * frac_day
         kwh_night += actual_kwh * frac_night
 
-    rate_day   = django_settings.ELECTRICITY_RATE_DAY_BGN
-    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_BGN
+    rate_day   = django_settings.ELECTRICITY_RATE_DAY_EUR
+    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_EUR
     total_kwh  = kwh_day + kwh_night
     return {
         "kwh":            round(total_kwh,  4),
         "kwh_day":        round(kwh_day,    4),
         "kwh_night":      round(kwh_night,  4),
-        "cost_bgn":       round(kwh_day * rate_day + kwh_night * rate_night, 4),
-        "cost_day_bgn":   round(kwh_day   * rate_day,   4),
-        "cost_night_bgn": round(kwh_night * rate_night, 4),
+        "cost_eur":       round(kwh_day * rate_day + kwh_night * rate_night, 4),
+        "cost_day_eur":   round(kwh_day   * rate_day,   4),
+        "cost_night_eur": round(kwh_night * rate_night, 4),
         "avg_watts":      0.0,
     }
 
 
 def _daily_breakdown_tou(emitter: IREmitter, days=7):
-    """Return list of {date, kwh, cost_bgn, day_kwh, day_cost_bgn, night_kwh, night_cost_bgn}."""
+    """Return list of {date, kwh, cost_eur, day_kwh, day_cost_eur, night_kwh, night_cost_eur}."""
     result = []
     now = timezone.localtime(timezone.now())
     for d in range(days - 1, -1, -1):
@@ -297,18 +297,18 @@ def _daily_breakdown_tou(emitter: IREmitter, days=7):
         result.append({
             "date":           day_start.strftime("%a %d/%m"),
             "kwh":            cost["kwh"],
-            "cost_bgn":       cost["cost_bgn"],
+            "cost_eur":       cost["cost_eur"],
             "day_kwh":        cost["kwh_day"],
-            "day_cost_bgn":   cost["cost_day_bgn"],
+            "day_cost_eur":   cost["cost_day_eur"],
             "night_kwh":      cost["kwh_night"],
-            "night_cost_bgn": cost["cost_night_bgn"],
+            "night_cost_eur": cost["cost_night_eur"],
         })
     return result
 
 
 def _plug_daily_breakdown_tou(plug: SmartPlug, days=7):
-    rate_day      = django_settings.ELECTRICITY_RATE_DAY_BGN
-    rate_night    = django_settings.ELECTRICITY_RATE_NIGHT_BGN
+    rate_day      = django_settings.ELECTRICITY_RATE_DAY_EUR
+    rate_night    = django_settings.ELECTRICITY_RATE_NIGHT_EUR
     night_start_h = django_settings.NIGHT_START_HOUR
     night_end_h   = django_settings.NIGHT_END_HOUR
 
@@ -355,11 +355,11 @@ def _plug_daily_breakdown_tou(plug: SmartPlug, days=7):
             result.append({
                 "date":           day_start.strftime("%a %d/%m"),
                 "kwh":            round(kwh_night + kwh_day, 4),
-                "cost_bgn":       round(kwh_day * rate_day + kwh_night * rate_night, 4),
+                "cost_eur":       round(kwh_day * rate_day + kwh_night * rate_night, 4),
                 "day_kwh":        round(kwh_day, 4),
-                "day_cost_bgn":   round(kwh_day * rate_day, 4),
+                "day_cost_eur":   round(kwh_day * rate_day, 4),
                 "night_kwh":      round(kwh_night, 4),
-                "night_cost_bgn": round(kwh_night * rate_night, 4),
+                "night_cost_eur": round(kwh_night * rate_night, 4),
             })
         else:
             # Fall back to measured_watts-based estimate when energy_wh is absent.
@@ -367,17 +367,17 @@ def _plug_daily_breakdown_tou(plug: SmartPlug, days=7):
             result.append({
                 "date":           day_start.strftime("%a %d/%m"),
                 "kwh":            cost["kwh"],
-                "cost_bgn":       cost["cost_bgn"],
+                "cost_eur":       cost["cost_eur"],
                 "day_kwh":        cost["kwh_day"],
-                "day_cost_bgn":   cost["cost_day_bgn"],
+                "day_cost_eur":   cost["cost_day_eur"],
                 "night_kwh":      cost["kwh_night"],
-                "night_cost_bgn": cost["cost_night_bgn"],
+                "night_cost_eur": cost["cost_night_eur"],
             })
     return result
 
 
 def _hourly_breakdown_ac(emitter: IREmitter, hours=24):
-    """Return list of {hour, kwh, cost_bgn, period, partial} for past N hours."""
+    """Return list of {hour, kwh, cost_eur, period, partial} for past N hours."""
     result = []
     now = timezone.now()
     # Floor to current hour start
@@ -415,7 +415,7 @@ def _hourly_breakdown_ac(emitter: IREmitter, hours=24):
         result.append({
             "hour":     local_slot.strftime("%H:00"),
             "kwh":      cost["kwh"],
-            "cost_bgn": cost["cost_bgn"],
+            "cost_eur": cost["cost_eur"],
             "period":   "night" if is_night_hour(local_slot.hour) else "day",
             "partial":  is_partial,
         })
@@ -423,8 +423,8 @@ def _hourly_breakdown_ac(emitter: IREmitter, hours=24):
 
 
 def _hourly_breakdown_plug(plug: SmartPlug, hours=24):
-    rate_day   = django_settings.ELECTRICITY_RATE_DAY_BGN
-    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_BGN
+    rate_day   = django_settings.ELECTRICITY_RATE_DAY_EUR
+    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_EUR
     result = []
     now = timezone.now()
     current_hour_start = now.replace(minute=0, second=0, microsecond=0)
@@ -453,7 +453,7 @@ def _hourly_breakdown_plug(plug: SmartPlug, hours=24):
         if start_wh is not None and end_wh is not None and end_wh >= start_wh:
             kwh      = round((end_wh - start_wh) / 1000.0, 4)
             rate     = rate_night if is_night else rate_day
-            cost_bgn = round(kwh * rate, 4)
+            cost_eur = round(kwh * rate, 4)
         else:
             # Fall back to measured_watts-based estimate.
             events = list(
@@ -476,12 +476,12 @@ def _hourly_breakdown_plug(plug: SmartPlug, hours=24):
                 e.estimated_watts = e.measured_watts
             c        = compute_interval_cost_tou(slot_events)
             kwh      = c["kwh"]
-            cost_bgn = c["cost_bgn"]
+            cost_eur = c["cost_eur"]
 
         result.append({
             "hour":     local_slot.strftime("%H:00"),
             "kwh":      kwh,
-            "cost_bgn": cost_bgn,
+            "cost_eur": cost_eur,
             "period":   "night" if is_night else "day",
             "partial":  is_partial,
         })
@@ -492,10 +492,10 @@ def _recommendations(devices_summary: list) -> list:
     """
     Rule-based recommendations.  devices_summary is a list of dicts:
       {name, type, kwh_day, kwh_night, has_schedule, preheat_starts_in_day}
-    Returns up to 5 items sorted by potential_saving_bgn descending.
+    Returns up to 5 items sorted by potential_saving_eur descending.
     """
-    rate_day   = django_settings.ELECTRICITY_RATE_DAY_BGN
-    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_BGN
+    rate_day   = django_settings.ELECTRICITY_RATE_DAY_EUR
+    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_EUR
     savings_diff = rate_day - rate_night
     night_end = django_settings.NIGHT_END_HOUR
 
@@ -520,9 +520,9 @@ def _recommendations(devices_summary: list) -> list:
                     "type": "shift_ac" if d["type"] == "ac" else "shift_plug",
                     "message": (
                         f"{pct}% of {d['name']} usage is during peak hours — "
-                        f"shifting to night could save {saving:.2f} BGN/month"
+                        f"shifting to night could save {saving:.2f} €/month"
                     ),
-                    "potential_saving_bgn": saving,
+                    "potential_saving_eur": saving,
                     "device_name": d["name"],
                 })
 
@@ -538,7 +538,7 @@ def _recommendations(devices_summary: list) -> list:
                         f"Schedule preheat for {d['name']} to start before "
                         f"{night_end:02d}:00 to use cheaper night electricity"
                     ),
-                    "potential_saving_bgn": saving,
+                    "potential_saving_eur": saving,
                     "device_name": d["name"],
                 })
 
@@ -551,13 +551,13 @@ def _recommendations(devices_summary: list) -> list:
                 "type": "global_tip",
                 "message": (
                     f"Less than 20% of your total usage happens at night — "
-                    f"shifting loads could save up to {saving:.2f} BGN/month"
+                    f"shifting loads could save up to {saving:.2f} €/month"
                 ),
-                "potential_saving_bgn": saving,
+                "potential_saving_eur": saving,
                 "device_name": None,
             })
 
-    recs.sort(key=lambda r: r["potential_saving_bgn"], reverse=True)
+    recs.sort(key=lambda r: r["potential_saving_eur"], reverse=True)
     return recs[:5]
 
 
@@ -624,7 +624,7 @@ def dashboard_data(request):
             # Billing cycle cost + projection
             cost_cycle = _cost_for_period_tou(emitter, cycle_start_dt)
             cycle_projected = (
-                round(cost_cycle["cost_bgn"] / cycle_days_elapsed * cycle_total_days, 4)
+                round(cost_cycle["cost_eur"] / cycle_days_elapsed * cycle_total_days, 4)
                 if cycle_days_elapsed >= 0.5 else None
             )
 
@@ -635,7 +635,7 @@ def dashboard_data(request):
             )
             cost_session = (
                 _cost_for_period_tou(emitter, last_on.ts)
-                if last_on else {"kwh": 0, "cost_bgn": 0}
+                if last_on else {"kwh": 0, "cost_eur": 0}
             )
 
             units.append({
@@ -653,22 +653,22 @@ def dashboard_data(request):
                     "outdoor_c":   last_event.outdoor_temp_c if last_event else None,
                 } if last_event else {},
                 "cost": {
-                    "session_bgn":         cost_session["cost_bgn"],
+                    "session_eur":         cost_session["cost_eur"],
                     "session_kwh":         cost_session["kwh"],
-                    "today_bgn":           cost_today["cost_bgn"],
+                    "today_eur":           cost_today["cost_eur"],
                     "today_kwh":           cost_today["kwh"],
-                    "today_day_bgn":       cost_today["cost_day_bgn"],
-                    "today_night_bgn":     cost_today["cost_night_bgn"],
+                    "today_day_eur":       cost_today["cost_day_eur"],
+                    "today_night_eur":     cost_today["cost_night_eur"],
                     "today_day_kwh":       cost_today["kwh_day"],
                     "today_night_kwh":     cost_today["kwh_night"],
-                    "week_bgn":            cost_week["cost_bgn"],
-                    "week_day_bgn":        cost_week["cost_day_bgn"],
-                    "week_night_bgn":      cost_week["cost_night_bgn"],
+                    "week_eur":            cost_week["cost_eur"],
+                    "week_day_eur":        cost_week["cost_day_eur"],
+                    "week_night_eur":      cost_week["cost_night_eur"],
                     "week_day_kwh":        cost_week["kwh_day"],
                     "week_night_kwh":      cost_week["kwh_night"],
-                    "month_bgn":           cost_month["cost_bgn"],
-                    "cycle_bgn":           cost_cycle["cost_bgn"],
-                    "cycle_projected_bgn": cycle_projected,
+                    "month_eur":           cost_month["cost_eur"],
+                    "cycle_eur":           cost_cycle["cost_eur"],
+                    "cycle_projected_eur": cycle_projected,
                 },
                 "daily":  _daily_breakdown_tou(emitter, days=7),
                 "hourly": _hourly_breakdown_ac(emitter, hours=24),
@@ -728,7 +728,7 @@ def dashboard_data(request):
 
             cost_cycle = _plug_cost_for_period_wh(plug, cycle_start_dt)
             cycle_projected = (
-                round(cost_cycle["cost_bgn"] / cycle_days_elapsed * cycle_total_days, 4)
+                round(cost_cycle["cost_eur"] / cycle_days_elapsed * cycle_total_days, 4)
                 if cycle_days_elapsed >= 0.5 else None
             )
 
@@ -738,7 +738,7 @@ def dashboard_data(request):
             )
             cost_session = (
                 _plug_cost_for_period_wh(plug, last_on.ts)
-                if last_on else {"kwh": 0, "cost_bgn": 0}
+                if last_on else {"kwh": 0, "cost_eur": 0}
             )
 
             plug_online = bool(
@@ -760,22 +760,22 @@ def dashboard_data(request):
                     "watts": last_event.measured_watts if last_event else 0,
                 },
                 "cost": {
-                    "session_bgn":         cost_session["cost_bgn"],
+                    "session_eur":         cost_session["cost_eur"],
                     "session_kwh":         cost_session["kwh"],
-                    "today_bgn":           cost_today["cost_bgn"],
+                    "today_eur":           cost_today["cost_eur"],
                     "today_kwh":           cost_today["kwh"],
-                    "today_day_bgn":       cost_today["cost_day_bgn"],
-                    "today_night_bgn":     cost_today["cost_night_bgn"],
+                    "today_day_eur":       cost_today["cost_day_eur"],
+                    "today_night_eur":     cost_today["cost_night_eur"],
                     "today_day_kwh":       cost_today["kwh_day"],
                     "today_night_kwh":     cost_today["kwh_night"],
-                    "week_bgn":            cost_week["cost_bgn"],
-                    "week_day_bgn":        cost_week["cost_day_bgn"],
-                    "week_night_bgn":      cost_week["cost_night_bgn"],
+                    "week_eur":            cost_week["cost_eur"],
+                    "week_day_eur":        cost_week["cost_day_eur"],
+                    "week_night_eur":      cost_week["cost_night_eur"],
                     "week_day_kwh":        cost_week["kwh_day"],
                     "week_night_kwh":      cost_week["kwh_night"],
-                    "month_bgn":           cost_month["cost_bgn"],
-                    "cycle_bgn":           cost_cycle["cost_bgn"],
-                    "cycle_projected_bgn": cycle_projected,
+                    "month_eur":           cost_month["cost_eur"],
+                    "cycle_eur":           cost_cycle["cost_eur"],
+                    "cycle_projected_eur": cycle_projected,
                 },
                 "daily":  _plug_daily_breakdown_tou(plug, days=7),
                 "hourly": _hourly_breakdown_plug(plug, hours=24),
@@ -828,8 +828,8 @@ def dashboard_data(request):
             "days_elapsed":  round(cycle_days_elapsed, 1),
         },
         "tariff": {
-            "rate_day_bgn":   django_settings.ELECTRICITY_RATE_DAY_BGN,
-            "rate_night_bgn": django_settings.ELECTRICITY_RATE_NIGHT_BGN,
+            "rate_day_eur":   django_settings.ELECTRICITY_RATE_DAY_EUR,
+            "rate_night_eur": django_settings.ELECTRICITY_RATE_NIGHT_EUR,
             "night_start":    django_settings.NIGHT_START_HOUR,
             "night_end":      django_settings.NIGHT_END_HOUR,
         },
