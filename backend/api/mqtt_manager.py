@@ -86,11 +86,11 @@ def _on_plug_metering(hub_id: str, addr_hex: str, raw_payload):
     hub.save(update_fields=["last_seen"])
 
     short_addr = int(addr_hex, 16)
-    try:
-        plug = SmartPlug.objects.get(hub=hub, short_addr=short_addr)
-    except SmartPlug.DoesNotExist:
-        logger.warning("Metering from unknown plug hub=%s addr=0x%04X — ignoring (run a scan to register)", hub_id, short_addr)
-        return
+    plug, _ = SmartPlug.objects.get_or_create(
+        hub=hub,
+        short_addr=short_addr,
+        defaults={"name": f"Plug 0x{short_addr:04X}"},
+    )
     plug.online = True
     plug.last_seen = timezone.now()
     plug.save(update_fields=["online", "last_seen"])
