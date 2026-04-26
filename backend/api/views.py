@@ -17,7 +17,9 @@ from .energy_model import (
     is_night_hour,
     split_interval_by_period,
 )
-from .models import ACEvent, Hub, IREmitter, PendingCommand, Schedule, SmartPlug, SmartPlugEvent
+from .models import (ACEvent, Hub, IREmitter, PendingCommand, Schedule,
+                     ShellyEMDevice, ShellyEMReading,
+                     SmartPlug, SmartPlugEvent)
 from .weather import get_outdoor_temp
 
 logger = logging.getLogger(__name__)
@@ -1210,3 +1212,228 @@ def update_plug(request, plug_id):
         plug.save(update_fields=["name"])
 
     return Response({"id": plug.id, "name": plug.name})
+
+
+# ---------------------------------------------------------------------------
+# Shelly EM Mini Gen4 — device management
+# ---------------------------------------------------------------------------
+
+def _shelly_em_device_dict(device: ShellyEMDevice) -> dict:
+    latest = device.readings.order_by("-ts").first()
+    return {
+        "id":          device.id,
+        "device_id":   device.device_id,
+        "mac":         device.mac,
+        "name":        device.name,
+        "ip_address":  device.ip_address,
+        "online":      device.online,
+        "last_seen":   device.last_seen,
+        "fw_version":  device.fw_version,
+        "latest_reading": _shelly_em_reading_dict(latest) if latest else None,
+    }
+
+
+def _shelly_em_reading_dict(reading: ShellyEMReading) -> dict:
+    return {
+        "id":              reading.id,
+        "ts":              reading.ts,
+        "a_current":       reading.a_current,
+        "a_voltage":       reading.a_voltage,
+        "a_act_power":     reading.a_act_power,
+        "a_aprt_power":    reading.a_aprt_power,
+        "a_pf":            reading.a_pf,
+        "a_freq":          reading.a_freq,
+        "a_energy_wh":     reading.a_energy_wh,
+        "b_current":       reading.b_current,
+        "b_voltage":       reading.b_voltage,
+        "b_act_power":     reading.b_act_power,
+        "b_aprt_power":    reading.b_aprt_power,
+        "b_pf":            reading.b_pf,
+        "b_freq":          reading.b_freq,
+        "b_energy_wh":     reading.b_energy_wh,
+        "total_act_power":  reading.total_act_power,
+        "total_aprt_power": reading.total_aprt_power,
+    }
+
+
+@api_view(["GET", "POST"])
+def shelly_em_list(request):
+    """
+    GET  — list all registered Shelly EM devices with their latest reading.
+    POST — register a device by IP address.
+            Body: {"ip": "192.168.1.x", "name": "optional label"}
+            Fetches /shelly for identification, then does an initial poll.
+    """
+    if request.method == "GET":
+        devices = ShellyEMDevice.objects.prefetch_related("readings").all()
+        return Response([_shelly_em_device_dict(d) for d in devices])
+
+    from . import shelly_em
+
+    ip = (request.data.get("ip") or "").strip()
+    if not ip:
+        return Response({"error": "ip is required"}, status=400)
+
+    info = shelly_em.get_device_info(ip)
+    if not info:
+        return Response({"error": f"Could not reach Shelly device at {ip}"}, status=502)
+
+    device_id = info.get("id", "")
+    mac       = info.get("mac", "")
+    if not device_id or not mac:
+        return Response({"error": "Device response missing id/mac fields"}, status=502)
+
+    name       = (request.data.get("name") or "").strip() or info.get("name", "Shelly EM")
+    fw_version = info.get("ver", "")
+
+    device, created = ShellyEMDevice.objects.get_or_create(
+        device_id=device_id,
+        defaults={
+            "mac":        mac,
+            "name":       name,
+            "ip_address": ip,
+            "fw_version": fw_version,
+            "online":     True,
+            "last_seen":  timezone.now(),
+        },
+    )
+    if not created:
+        device.ip_address = ip
+        device.fw_version = fw_version
+        device.online     = True
+        device.last_seen  = timezone.now()
+        if request.data.get("name"):
+            device.name = name
+        device.save(update_fields=["ip_address", "fw_version", "online", "last_seen", "name"])
+
+    # Initial reading
+    em_status = shelly_em.get_em_status(ip)
+    if em_status:
+        em_data = shelly_em.get_em_data(ip)
+        kwargs  = shelly_em.reading_from_status(em_status, em_data)
+        ShellyEMReading.objects.create(device=device, **kwargs)
+
+    status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    return Response(_shelly_em_device_dict(device), status=status_code)
+
+
+@api_view(["GET", "PATCH", "DELETE"])
+def shelly_em_detail(request, device_id):
+    """
+    GET    — device detail with latest reading.
+    PATCH  — update name or ip_address.
+    DELETE — remove device and all its readings.
+    """
+    try:
+        device = ShellyEMDevice.objects.get(pk=device_id)
+    except ShellyEMDevice.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    if request.method == "GET":
+        return Response(_shelly_em_device_dict(device))
+
+    if request.method == "DELETE":
+        device.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # PATCH
+    changed = []
+    for field in ("name", "ip_address"):
+        if field in request.data:
+            setattr(device, field, request.data[field])
+            changed.append(field)
+    if changed:
+        device.save(update_fields=changed)
+    return Response(_shelly_em_device_dict(device))
+
+
+@api_view(["POST"])
+def shelly_em_poll(request, device_id):
+    """
+    Force-fetch the current readings from the device via HTTP and store them.
+    Returns the new reading.
+    """
+    from . import shelly_em
+
+    try:
+        device = ShellyEMDevice.objects.get(pk=device_id)
+    except ShellyEMDevice.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    if not device.ip_address:
+        return Response({"error": "No IP address on record for this device"}, status=400)
+
+    em_status = shelly_em.get_em_status(device.ip_address)
+    if not em_status:
+        device.online = False
+        device.save(update_fields=["online"])
+        return Response({"error": "Device unreachable"}, status=502)
+
+    em_data = shelly_em.get_em_data(device.ip_address)
+    kwargs  = shelly_em.reading_from_status(em_status, em_data)
+    reading = ShellyEMReading.objects.create(device=device, **kwargs)
+
+    device.online    = True
+    device.last_seen = timezone.now()
+    device.save(update_fields=["online", "last_seen"])
+
+    return Response(_shelly_em_reading_dict(reading), status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET"])
+def shelly_em_readings(request, device_id):
+    """
+    Return paginated readings for a device.
+    Optional query params: limit (default 100), offset (default 0).
+    """
+    try:
+        device = ShellyEMDevice.objects.get(pk=device_id)
+    except ShellyEMDevice.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+
+    try:
+        limit  = max(1, min(int(request.query_params.get("limit",  100)), 1000))
+        offset = max(0, int(request.query_params.get("offset", 0)))
+    except (TypeError, ValueError):
+        return Response({"error": "limit and offset must be integers"}, status=400)
+
+    qs = device.readings.order_by("-ts")[offset : offset + limit]
+    return Response({
+        "device_id": device.id,
+        "count":     device.readings.count(),
+        "limit":     limit,
+        "offset":    offset,
+        "readings":  [_shelly_em_reading_dict(r) for r in qs],
+    })
+
+
+@api_view(["POST"])
+def shelly_em_discover(request):
+    """
+    Scan the local network for Shelly devices via mDNS (_shelly._tcp.local.).
+    Returns a list of discovered devices with their IP and hostname.
+    Optional body: {"timeout_s": 4.0}
+    Does NOT auto-register; call POST /api/shelly-em/ with the IP to register.
+    """
+    from . import shelly_em
+
+    timeout_s = float((request.data or {}).get("timeout_s", 4.0))
+    timeout_s = max(1.0, min(timeout_s, 15.0))
+
+    found = shelly_em.discover_mdns(timeout_s=timeout_s)
+
+    # Enrich each entry with the device identification blob
+    results = []
+    for entry in found:
+        info = shelly_em.get_device_info(entry["ip"]) if entry.get("ip") else None
+        already_registered = (
+            ShellyEMDevice.objects.filter(device_id=info["id"]).exists()
+            if info and info.get("id") else False
+        )
+        results.append({
+            **entry,
+            "device_info":       info,
+            "already_registered": already_registered,
+        })
+
+    return Response({"found": results})

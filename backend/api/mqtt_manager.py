@@ -6,12 +6,19 @@ Responsibilities:
 - Subscribe to hub/+/status to track hub online/offline state (replaces heartbeat endpoint).
 - Subscribe to hub/+/plug/+/metering for smart plug power readings.
 - Subscribe to hub/+/network for on-demand Zigbee network scan results.
+- Subscribe to +/status/em:0 and +/status/emdata:0 for Shelly EM readings.
+- Subscribe to +/online for Shelly device presence updates.
 
-Topic layout:
+Topic layout (Zigbee hub):
   hub/{hub_id}/commands              ← backend publishes, hub subscribes  (QoS 1)
   hub/{hub_id}/status                ← hub publishes "online" on connect, LWT sends "offline"
   hub/{hub_id}/plug/{addr}/metering  ← hub publishes plug power readings  (QoS 0)
   hub/{hub_id}/network               ← hub publishes scan results: {"plugs": [addr, ...]}
+
+Topic layout (Shelly EM devices — Gen2/Gen4 MQTT):
+  {device_id}/online                 ← "true"/"false" on connect/disconnect
+  {device_id}/status/em:0            ← instantaneous EM readings (JSON)
+  {device_id}/status/emdata:0        ← cumulative energy counters (JSON)
 """
 
 import json
@@ -35,6 +42,10 @@ def _on_connect(client, userdata, flags, rc):
             ("hub/+/status", 1),
             ("hub/+/plug/+/metering", 0),
             ("hub/+/network", 1),
+            # Shelly Gen2/Gen4 topics
+            ("+/online", 0),
+            ("+/status/em:0", 0),
+            ("+/status/emdata:0", 0),
         ])
     else:
         logger.error("MQTT connection failed (rc=%d)", rc)
@@ -178,9 +189,98 @@ def _on_hub_network(hub_id: str, raw_payload):
     logger.info("Network scan: hub=%s reported %d plug(s)", hub_id, len(addrs))
 
 
+def _is_shelly(device_id: str) -> bool:
+    return device_id.lower().startswith("shelly")
+
+
+def _on_shelly_online(device_id: str, raw_payload):
+    """Handle {device_id}/online — update ShellyEMDevice.online."""
+    online = raw_payload.decode().strip().lower() == "true"
+    from .models import ShellyEMDevice
+    from django.utils import timezone as tz
+
+    updated = ShellyEMDevice.objects.filter(device_id=device_id).update(
+        online=online,
+        **( {"last_seen": tz.now()} if online else {} ),
+    )
+    if updated:
+        logger.info("Shelly %s is %s (MQTT)", device_id, "online" if online else "offline")
+
+
+def _on_shelly_em_status(device_id: str, raw_payload):
+    """Handle {device_id}/status/em:0 — store a ShellyEMReading."""
+    try:
+        data = json.loads(raw_payload.decode())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        logger.warning("Invalid JSON in em:0 from %s", device_id)
+        return
+
+    from .models import ShellyEMDevice, ShellyEMReading
+    from .shelly_em import reading_from_status
+
+    try:
+        device = ShellyEMDevice.objects.get(device_id=device_id)
+    except ShellyEMDevice.DoesNotExist:
+        logger.debug("Shelly em:0 from unknown device %s — ignoring", device_id)
+        return
+
+    device.online = True
+    device.last_seen = timezone.now()
+    device.save(update_fields=["online", "last_seen"])
+
+    kwargs = reading_from_status(data)
+    ShellyEMReading.objects.create(device=device, **kwargs)
+    logger.info("Shelly EM reading stored for %s (%.1fW total)", device_id,
+                kwargs.get("total_act_power") or 0)
+
+
+def _on_shelly_emdata_status(device_id: str, raw_payload):
+    """Handle {device_id}/status/emdata:0 — patch energy fields on the latest reading."""
+    try:
+        data = json.loads(raw_payload.decode())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        logger.warning("Invalid JSON in emdata:0 from %s", device_id)
+        return
+
+    from .models import ShellyEMDevice, ShellyEMReading
+
+    try:
+        device = ShellyEMDevice.objects.get(device_id=device_id)
+    except ShellyEMDevice.DoesNotExist:
+        return
+
+    latest = ShellyEMReading.objects.filter(device=device).order_by("-ts").first()
+    if not latest:
+        return
+
+    update_fields = []
+    for src, dst in [("a_total_act_energy", "a_energy_wh"),
+                     ("b_total_act_energy", "b_energy_wh")]:
+        v = data.get(src)
+        if v is not None:
+            setattr(latest, dst, float(v))
+            update_fields.append(dst)
+    if update_fields:
+        latest.save(update_fields=update_fields)
+
+
 def _on_message(client, userdata, msg):
     """Route incoming messages to the appropriate handler."""
     parts = msg.topic.split("/")
+
+    # Shelly: {device_id}/online
+    if len(parts) == 2 and parts[1] == "online" and _is_shelly(parts[0]):
+        _on_shelly_online(parts[0], msg.payload)
+        return
+    # Shelly: {device_id}/status/em:0
+    if len(parts) == 3 and parts[1] == "status" and parts[2] == "em:0" and _is_shelly(parts[0]):
+        _on_shelly_em_status(parts[0], msg.payload)
+        return
+    # Shelly: {device_id}/status/emdata:0
+    if len(parts) == 3 and parts[1] == "status" and parts[2] == "emdata:0" and _is_shelly(parts[0]):
+        _on_shelly_emdata_status(parts[0], msg.payload)
+        return
+
     # hub/{hub_id}/status
     if len(parts) == 3 and parts[2] == "status":
         _on_hub_status(parts[1], msg.payload)

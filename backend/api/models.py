@@ -131,6 +131,61 @@ class SmartPlugEvent(models.Model):
                 f"{'ON' if self.power_on else 'OFF'} {self.measured_watts}W")
 
 
+class ShellyEMDevice(models.Model):
+    """A Shelly EM Mini Gen4 energy monitor on the local WiFi network."""
+    device_id   = models.CharField(max_length=128, unique=True)   # e.g. shellyemmini-AABBCCDDEEFF
+    mac         = models.CharField(max_length=32, unique=True)
+    name        = models.CharField(max_length=128, default="Shelly EM Mini Gen4")
+    ip_address  = models.GenericIPAddressField(protocol="IPv4", null=True, blank=True)
+    online      = models.BooleanField(default=False)
+    last_seen   = models.DateTimeField(null=True, blank=True)
+    fw_version  = models.CharField(max_length=64, blank=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.device_id})"
+
+
+class ShellyEMReading(models.Model):
+    """
+    Instantaneous EM reading from a ShellyEMDevice.
+    Sourced either by HTTP poll or MQTT push from the device.
+    Channel B fields are null for single-clamp devices.
+    """
+    device = models.ForeignKey(ShellyEMDevice, on_delete=models.CASCADE,
+                               related_name="readings")
+
+    # Channel A
+    a_current    = models.FloatField(null=True, blank=True)   # A
+    a_voltage    = models.FloatField(null=True, blank=True)   # V
+    a_act_power  = models.FloatField(null=True, blank=True)   # W
+    a_aprt_power = models.FloatField(null=True, blank=True)   # VA
+    a_pf         = models.FloatField(null=True, blank=True)   # dimensionless
+    a_freq       = models.FloatField(null=True, blank=True)   # Hz
+    a_energy_wh  = models.FloatField(null=True, blank=True)   # cumulative Wh
+
+    # Channel B (optional — only populated when a second CT clamp is fitted)
+    b_current    = models.FloatField(null=True, blank=True)
+    b_voltage    = models.FloatField(null=True, blank=True)
+    b_act_power  = models.FloatField(null=True, blank=True)
+    b_aprt_power = models.FloatField(null=True, blank=True)
+    b_pf         = models.FloatField(null=True, blank=True)
+    b_freq       = models.FloatField(null=True, blank=True)
+    b_energy_wh  = models.FloatField(null=True, blank=True)
+
+    total_act_power  = models.FloatField(null=True, blank=True)  # W
+    total_aprt_power = models.FloatField(null=True, blank=True)  # VA
+
+    ts = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["ts"]
+
+    def __str__(self):
+        return (f"{self.device} @ {self.ts:%Y-%m-%d %H:%M} "
+                f"{self.total_act_power}W")
+
+
 class PendingCommand(models.Model):
     """
     Backend-to-hub command queue.

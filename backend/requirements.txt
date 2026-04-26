@@ -5,3 +5,4 @@ requests==2.31.*
 apscheduler==3.10.*
 paho-mqtt>=1.6,<2.0
 drf-spectacular==0.28.*
+zeroconf==0.131.*

@@ -28,4 +28,11 @@ urlpatterns = [
     # Smart plug management
     path("plugs/<int:plug_id>/",             views.update_plug,     name="update-plug"),
     path("plugs/<int:plug_id>/control/",     views.control_plug,    name="control-plug"),
+
+    # Shelly EM Mini Gen4
+    path("shelly-em/",                           views.shelly_em_list,     name="shelly-em-list"),
+    path("shelly-em/discover/",                  views.shelly_em_discover, name="shelly-em-discover"),
+    path("shelly-em/<int:device_id>/",           views.shelly_em_detail,   name="shelly-em-detail"),
+    path("shelly-em/<int:device_id>/poll/",      views.shelly_em_poll,     name="shelly-em-poll"),
+    path("shelly-em/<int:device_id>/readings/",  views.shelly_em_readings, name="shelly-em-readings"),
 ]
