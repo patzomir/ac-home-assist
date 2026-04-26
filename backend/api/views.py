@@ -490,6 +490,199 @@ def _hourly_breakdown_plug(plug: SmartPlug, hours=24):
     return result
 
 
+def _shelly_em_cost_for_period(device: ShellyEMDevice, since, until=None):
+    """
+    Cost for [since, until] using a_energy_wh counter differences (Wh floats).
+    Falls back to a_act_power × time when counter data is insufficient.
+    """
+    until = until or timezone.now()
+    rate_day   = django_settings.ELECTRICITY_RATE_DAY_EUR
+    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_EUR
+
+    readings_with_wh = list(
+        ShellyEMReading.objects
+        .filter(device=device, a_energy_wh__isnull=False, ts__lte=until)
+        .order_by("ts")
+    )
+    before_since = [r for r in readings_with_wh if r.ts <= since]
+    in_range     = [r for r in readings_with_wh if r.ts >  since]
+
+    if before_since:
+        sequence = [(since, before_since[-1].a_energy_wh)] + \
+                   [(r.ts, r.a_energy_wh) for r in in_range]
+    else:
+        sequence = [(r.ts, r.a_energy_wh) for r in in_range]
+
+    if len(sequence) >= 2:
+        kwh_day = 0.0
+        kwh_night = 0.0
+        for i in range(len(sequence) - 1):
+            t1, wh1 = sequence[i]
+            t2, wh2 = sequence[i + 1]
+            delta_wh = wh2 - wh1
+            if delta_wh <= 0:
+                continue
+            split    = split_interval_by_period(t1, t2, 1000)
+            frac_kwh = split["kwh"]
+            if frac_kwh > 0:
+                frac_day   = split["kwh_day"]   / frac_kwh
+                frac_night = split["kwh_night"] / frac_kwh
+            else:
+                local_t1 = timezone.localtime(t1)
+                frac_day, frac_night = (
+                    (0.0, 1.0) if is_night_hour(local_t1.hour) else (1.0, 0.0)
+                )
+            actual_kwh = delta_wh / 1000.0
+            kwh_day   += actual_kwh * frac_day
+            kwh_night += actual_kwh * frac_night
+        total_kwh = kwh_day + kwh_night
+        return {
+            "kwh":            round(total_kwh, 4),
+            "kwh_day":        round(kwh_day, 4),
+            "kwh_night":      round(kwh_night, 4),
+            "cost_eur":       round(kwh_day * rate_day + kwh_night * rate_night, 4),
+            "cost_day_eur":   round(kwh_day * rate_day, 4),
+            "cost_night_eur": round(kwh_night * rate_night, 4),
+        }
+
+    # Fallback: a_act_power × time
+    readings = list(
+        ShellyEMReading.objects
+        .filter(device=device, ts__gte=since, ts__lte=until)
+        .order_by("ts")
+    )
+    if readings:
+        last = readings[-1]
+        readings.append(ShellyEMReading(device=device, a_act_power=last.a_act_power, ts=until))
+    for r in readings:
+        r.estimated_watts = int(r.a_act_power or 0)
+    return compute_interval_cost_tou(readings)
+
+
+def _shelly_em_daily_breakdown(device: ShellyEMDevice, days=7):
+    rate_day      = django_settings.ELECTRICITY_RATE_DAY_EUR
+    rate_night    = django_settings.ELECTRICITY_RATE_NIGHT_EUR
+    night_start_h = django_settings.NIGHT_START_HOUR
+    night_end_h   = django_settings.NIGHT_END_HOUR
+
+    wh_readings = list(
+        ShellyEMReading.objects
+        .filter(device=device, a_energy_wh__isnull=False)
+        .order_by("ts")
+    )
+
+    def last_wh_at(t):
+        return next((r.a_energy_wh for r in reversed(wh_readings) if r.ts <= t), None)
+
+    def wh_diff_kwh(t1, t2):
+        if t1 >= t2:
+            return 0.0
+        w1, w2 = last_wh_at(t1), last_wh_at(t2)
+        if w1 is None or w2 is None or w2 < w1:
+            return None
+        return (w2 - w1) / 1000.0
+
+    result = []
+    now = timezone.localtime(timezone.now())
+    for d in range(days - 1, -1, -1):
+        day_start    = (now - timedelta(days=d)).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end      = min(day_start + timedelta(days=1), now)
+        t_night1_end = min(day_start.replace(hour=night_end_h,   minute=0, second=0, microsecond=0), day_end)
+        t_day_end    = min(day_start.replace(hour=night_start_h, minute=0, second=0, microsecond=0), day_end)
+
+        night1_kwh = wh_diff_kwh(day_start,    t_night1_end)
+        day_kwh    = wh_diff_kwh(t_night1_end, t_day_end)
+        night2_kwh = wh_diff_kwh(t_day_end,    day_end)
+
+        if any(x is not None for x in [night1_kwh, day_kwh, night2_kwh]):
+            kwh_night = (night1_kwh or 0.0) + (night2_kwh or 0.0)
+            kwh_day   = day_kwh or 0.0
+            result.append({
+                "date":           day_start.strftime("%a %d/%m"),
+                "kwh":            round(kwh_night + kwh_day, 4),
+                "cost_eur":       round(kwh_day * rate_day + kwh_night * rate_night, 4),
+                "day_kwh":        round(kwh_day, 4),
+                "day_cost_eur":   round(kwh_day * rate_day, 4),
+                "night_kwh":      round(kwh_night, 4),
+                "night_cost_eur": round(kwh_night * rate_night, 4),
+            })
+        else:
+            cost = _shelly_em_cost_for_period(device, day_start, day_end)
+            result.append({
+                "date":           day_start.strftime("%a %d/%m"),
+                "kwh":            cost["kwh"],
+                "cost_eur":       cost["cost_eur"],
+                "day_kwh":        cost.get("kwh_day", 0),
+                "day_cost_eur":   cost.get("cost_day_eur", 0),
+                "night_kwh":      cost.get("kwh_night", 0),
+                "night_cost_eur": cost.get("cost_night_eur", 0),
+            })
+    return result
+
+
+def _shelly_em_hourly_breakdown(device: ShellyEMDevice, hours=24):
+    rate_day   = django_settings.ELECTRICITY_RATE_DAY_EUR
+    rate_night = django_settings.ELECTRICITY_RATE_NIGHT_EUR
+    result     = []
+    now        = timezone.now()
+    current_hour_start = now.replace(minute=0, second=0, microsecond=0)
+
+    wh_readings = list(
+        ShellyEMReading.objects
+        .filter(device=device, a_energy_wh__isnull=False)
+        .order_by("ts")
+    )
+
+    for h in range(hours - 1, -1, -1):
+        slot_start = current_hour_start - timedelta(hours=h)
+        slot_end   = slot_start + timedelta(hours=1)
+        is_partial = (h == 0)
+        if is_partial:
+            slot_end = now
+
+        local_slot = timezone.localtime(slot_start)
+        is_night   = is_night_hour(local_slot.hour)
+
+        start_wh = next((r.a_energy_wh for r in reversed(wh_readings) if r.ts <= slot_start), None)
+        end_wh   = next((r.a_energy_wh for r in reversed(wh_readings) if r.ts <= slot_end),   None)
+
+        if start_wh is not None and end_wh is not None and end_wh >= start_wh:
+            kwh      = round((end_wh - start_wh) / 1000.0, 4)
+            rate     = rate_night if is_night else rate_day
+            cost_eur = round(kwh * rate, 4)
+        else:
+            readings = list(
+                ShellyEMReading.objects
+                .filter(device=device, ts__lt=slot_end)
+                .order_by("ts")
+            )
+            slot_readings = [r for r in readings if r.ts >= slot_start]
+            leading = next((r for r in reversed(readings) if r.ts < slot_start), None)
+            if leading:
+                stub = ShellyEMReading(device=device, a_act_power=leading.a_act_power, ts=slot_start)
+                slot_readings = [stub] + slot_readings
+            if slot_readings:
+                slot_readings.append(ShellyEMReading(
+                    device=device,
+                    a_act_power=slot_readings[-1].a_act_power,
+                    ts=slot_end,
+                ))
+            for r in slot_readings:
+                r.estimated_watts = int(r.a_act_power or 0)
+            c        = compute_interval_cost_tou(slot_readings)
+            kwh      = c["kwh"]
+            cost_eur = c["cost_eur"]
+
+        result.append({
+            "hour":     local_slot.strftime("%H:00"),
+            "kwh":      kwh,
+            "cost_eur": cost_eur,
+            "period":   "night" if is_night else "day",
+            "partial":  is_partial,
+        })
+    return result
+
+
 def _recommendations(devices_summary: list) -> list:
     """
     Rule-based recommendations.  devices_summary is a list of dicts:
@@ -816,11 +1009,88 @@ def dashboard_data(request):
             } if scan else None,
         })
 
+    shelly_em_devices = []
+    for device in ShellyEMDevice.objects.prefetch_related("readings").all():
+        last_reading = device.readings.order_by("-ts").first()
+
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start  = today_start - timedelta(days=now.weekday())
+        month_start = today_start.replace(day=1)
+
+        cost_today = _shelly_em_cost_for_period(device, today_start)
+        cost_week  = _shelly_em_cost_for_period(device, week_start)
+        cost_month = _shelly_em_cost_for_period(device, month_start)
+        cost_cycle = _shelly_em_cost_for_period(device, cycle_start_dt)
+        cycle_projected = (
+            round(cost_cycle["cost_eur"] / cycle_days_elapsed * cycle_total_days, 4)
+            if cycle_days_elapsed >= 0.5 else None
+        )
+
+        first_reading_in_period = (
+            device.readings.filter(ts__gte=today_start).order_by("ts").first()
+        )
+        cost_session = (
+            _shelly_em_cost_for_period(device, first_reading_in_period.ts)
+            if first_reading_in_period else {"kwh": 0, "cost_eur": 0,
+                                             "kwh_day": 0, "kwh_night": 0,
+                                             "cost_day_eur": 0, "cost_night_eur": 0}
+        )
+
+        shelly_em_devices.append({
+            "id":          device.id,
+            "device_id":   device.device_id,
+            "name":        device.name,
+            "ip_address":  device.ip_address,
+            "online":      device.online,
+            "last_seen":   device.last_seen.isoformat() if device.last_seen else None,
+            "current": {
+                "a_act_power":       last_reading.a_act_power       if last_reading else None,
+                "b_act_power":       last_reading.b_act_power       if last_reading else None,
+                "total_act_power":   last_reading.total_act_power   if last_reading else None,
+                "a_voltage":         last_reading.a_voltage         if last_reading else None,
+                "a_current":         last_reading.a_current         if last_reading else None,
+                "a_pf":              last_reading.a_pf              if last_reading else None,
+                "a_freq":            last_reading.a_freq            if last_reading else None,
+                "a_energy_wh":       last_reading.a_energy_wh       if last_reading else None,
+                "ts":                last_reading.ts.isoformat()    if last_reading else None,
+            },
+            "cost": {
+                "session_eur":         cost_session["cost_eur"],
+                "session_kwh":         cost_session["kwh"],
+                "today_eur":           cost_today["cost_eur"],
+                "today_kwh":           cost_today["kwh"],
+                "today_day_eur":       cost_today.get("cost_day_eur", 0),
+                "today_night_eur":     cost_today.get("cost_night_eur", 0),
+                "today_day_kwh":       cost_today.get("kwh_day", 0),
+                "today_night_kwh":     cost_today.get("kwh_night", 0),
+                "week_eur":            cost_week["cost_eur"],
+                "week_day_eur":        cost_week.get("cost_day_eur", 0),
+                "week_night_eur":      cost_week.get("cost_night_eur", 0),
+                "week_day_kwh":        cost_week.get("kwh_day", 0),
+                "week_night_kwh":      cost_week.get("kwh_night", 0),
+                "month_eur":           cost_month["cost_eur"],
+                "cycle_eur":           cost_cycle["cost_eur"],
+                "cycle_projected_eur": cycle_projected,
+            },
+            "daily":  _shelly_em_daily_breakdown(device, days=7),
+            "hourly": _shelly_em_hourly_breakdown(device, hours=24),
+        })
+        _devices_summary_list.append({
+            "name":                  device.name,
+            "type":                  "shelly_em",
+            "kwh_day":               cost_week.get("kwh_day", 0),
+            "kwh_night":             cost_week.get("kwh_night", 0),
+            "has_schedule":          False,
+            "preheat_starts_in_day": False,
+            "preheat_kwh_per_day":   0,
+        })
+
     return Response({
         "outdoor_temp_c": outdoor_temp,
-        "hubs":  hubs_list,
-        "units": units,
-        "plugs": plugs,
+        "hubs":      hubs_list,
+        "units":     units,
+        "plugs":     plugs,
+        "shelly_em": shelly_em_devices,
         "server_time": now.isoformat(),
         "cycle": {
             "start_day":     cycle_start_day,
