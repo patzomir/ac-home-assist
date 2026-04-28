@@ -145,10 +145,11 @@ Factory (before shipping):
 
 Customer setup (at home):
 1. Customer plugs in hub
-2. Hub enters setup mode (BLE to phone or WiFi AP)
-3. Customer enters home WiFi credentials
-4. Hub connects to home WiFi — setup complete
-5. Customer plugs in Zigbee plugs and places temperature sensors — they join automatically
+2. Customer scans QR code on hub (printed at factory, encodes device ID)
+3. Mobile/web app contacts backend — backend retrieves pre-paired Zigbee configuration
+4. Customer enters home WiFi credentials via BLE or WiFi AP
+5. Hub connects to home WiFi — backend completes commissioning automatically
+6. Customer plugs in Zigbee plugs and places temperature sensors — they join automatically
 ```
 
 **Key decision:** Zigbee mesh solves the range problem structurally for all in-home devices. Each IR emitter routes through the co-located plug in the same room — no dependency on hub placement or wall attenuation.
@@ -159,9 +160,39 @@ Customer setup (at home):
 
 ### Core Responsibilities
 - Store and organize data
-- Run control logic
+- Run control logic (Scheduler Engine)
 - Send commands to hub
 - Receive energy and temperature data forwarded from hub
+- Fleet management and OTA delivery
+
+---
+
+### Cloud-to-Edge Hybrid Model
+
+The backend is the intelligence layer, but execution stays at the edge:
+
+- **Backend role:** Schedule computation, analytics, fleet management, OTA delivery
+- **H2 role:** Local schedule execution — runs autonomously from NVS regardless of cloud connectivity
+- **Key principle:** The cloud pushes optimized schedules to H2; it does not execute commands in real time
+
+This means: if internet drops, the AC continues operating from the last synced schedule. The cloud enhances performance but is not a single point of failure for heating.
+
+**Scheduler Engine:**
+The backend computes optimal switch points using:
+- Room temperature sensor data
+- External temperature (weather API)
+- Tariff schedule (day/night or dynamic Day-Ahead market prices)
+
+The result is a pre-computed command array pushed to H2 — H2 executes precisely, stays lightweight, but runs an intelligent strategy.
+
+**Fleet Management:**
+With a centralized backend, the platform can:
+- Monitor the health of all deployed devices in real time
+- Detect systematic failures across the fleet (e.g., IR command miss rate)
+- Optimize Soft Start curves globally using anonymized data from deployed AC units
+- Push targeted diagnostics to specific devices without customer involvement
+
+---
 
 ---
 
@@ -337,6 +368,35 @@ See Control Logic section. The ±1.0°C deadband is enforced in both firmware (H
 
 ---
 
+## 🔐 Security & Connectivity
+
+### Hub-to-Cloud Communication
+
+The C6 hub acts as a **secure MQTT/WebSocket bridge** between the home Zigbee network and the central cloud backend.
+
+- All hub-to-cloud communication is encrypted with **TLS**
+- Each hub carries a unique device certificate provisioned at the factory
+- Certificates are rotated via OTA without requiring hub replacement
+
+### OTA Firmware Updates
+
+OTA is a first-class feature of the PaaS model — not an afterthought.
+
+- Firmware images are cryptographically signed and verified before installation
+- **H2 Rollback Mechanism:** If a new firmware image fails to boot or loses Zigbee connectivity within N minutes, the device automatically reverts to the previous version — no customer action required
+- C6 applies staged updates — verifies integrity and Zigbee coordinator stability before committing
+- Fleet-wide security patches and feature additions are deployed silently without customer interaction
+
+This enables the product to launch as a minimal MVP and evolve — Soft Start, Humidity Control, Dynamic Pricing Integration — delivered as OTA releases without hardware replacement.
+
+### Data Privacy
+
+- Power and temperature data are associated with anonymized device identifiers for fleet-level analytics
+- Individual home data is isolated per customer account
+- Local H2 schedule continues operating from NVS even if the customer requests account deletion
+
+---
+
 ## 📡 Communication Choices
 
 | Link | Protocol | Notes |
@@ -412,7 +472,7 @@ Keep it simple. Complexity is only justified after it's working well for yoursel
 
 - Multi-room optimization with per-room temperature sensors
 - Presence detection
-- OTA updates for ESP32 and IR emitters
+- OTA updates for ESP32 and IR emitters — foundation in place via centralized backend; H2 rollback mechanism required before enabling fleet-wide rollout
 - Native AC integrations (WiFi APIs instead of IR)
 - **Matter bridge on hub** — ESP32-C6 supports Matter over WiFi; exposing hub as a Matter bridge would allow integration with Apple Home / Google Home without replacing the Zigbee mesh. The 802.15.4 radio is shared between Zigbee and Thread, so Matter/Thread as a replacement protocol is not viable — Matter as a WiFi-based bridge layer is the realistic path.
 - **Day-Ahead пазар (динамични тарифи)**
